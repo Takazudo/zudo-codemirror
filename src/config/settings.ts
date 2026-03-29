@@ -42,6 +42,9 @@ export const settings = {
   math: false,
   aiAssistant: false as boolean,
   docHistory: false,
+  sidebarResizer: true,
+  sidebarToggle: true,
+  onBrokenMarkdownLinks: "warn" as string,
   colorTweakPanel: false as boolean,
   htmlPreview: {
     head: `<script src="/pj/zudo-codemirror/assets/cm6-bundle.min.js"></script>`,
