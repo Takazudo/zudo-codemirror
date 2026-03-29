@@ -1,0 +1,273 @@
+---
+title: 検索と置換
+description: "CodeMirror 6 での @codemirror/search を使った検索と置換: 検索パネル、キーバインディング、マッチのハイライト、正規表現検索。"
+sidebar_position: 4
+---
+
+## @codemirror/search
+
+`@codemirror/search` パッケージは、CodeMirror 6 の検索・置換機能を提供します。検索パネル UI、キーボードショートカット、マッチのハイライト、正規表現のサポートが含まれています。
+
+## 検索のセットアップ
+
+検索を有効にするには、`search()` Extension と `searchKeymap` キーバインディングを追加します。
+
+```ts
+import { search, searchKeymap } from "@codemirror/search";
+import { keymap } from "@codemirror/view";
+
+const extensions = [
+  search(),
+  keymap.of(searchKeymap),
+];
+```
+
+### searchKeymap
+
+`searchKeymap` は以下のデフォルトバインディングを提供します。
+
+- `Ctrl-F`（Windows/Linux）/ `Cmd-F`（macOS）-- 検索パネルを開く
+- `Ctrl-H`（Windows/Linux）/ `Cmd-Option-F`（macOS）-- 置換付きで検索パネルを開く
+- `F3` / `Ctrl-G` -- 次のマッチを検索
+- `Shift-F3` / `Ctrl-Shift-G` -- 前のマッチを検索
+- `Alt-G` -- 行へ移動
+
+## highlightSelectionMatches()
+
+`@codemirror/search` のこの Extension は、現在選択されているテキストの出現箇所をドキュメント全体でハイライトします。検索パネルとは独立して動作します。
+
+```ts
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const extensions = [highlightSelectionMatches()];
+```
+
+選択の最小長やスタイルを設定できます。
+
+```ts
+highlightSelectionMatches({
+  minSelectionLength: 2,
+  highlightWordAroundCursor: true,
+})
+```
+
+`highlightWordAroundCursor` が true の場合、テキストを選択せずにカーソルを単語内に置くだけで、その単語のすべての出現箇所がハイライトされます。
+
+## プログラムによる検索コマンド
+
+このパッケージは、コードから検索を制御するためのコマンドをエクスポートしています。
+
+```ts
+import {
+  openSearchPanel,
+  closeSearchPanel,
+  findNext,
+  findPrevious,
+  replaceNext,
+  replaceAll,
+  selectMatches,
+} from "@codemirror/search";
+```
+
+### openSearchPanel と closeSearchPanel
+
+検索パネルをプログラムで開閉するコマンドです。
+
+```ts
+import { openSearchPanel, closeSearchPanel } from "@codemirror/search";
+
+// Open the search panel
+openSearchPanel(view);
+
+// Close the search panel
+closeSearchPanel(view);
+```
+
+### findNext と findPrevious
+
+次または前のマッチに選択を移動します。
+
+```ts
+import { findNext, findPrevious } from "@codemirror/search";
+
+findNext(view);
+findPrevious(view);
+```
+
+### replaceNext と replaceAll
+
+現在のマッチまたはすべてのマッチを置換します。
+
+```ts
+import { replaceNext, replaceAll } from "@codemirror/search";
+
+replaceNext(view);
+replaceAll(view);
+```
+
+### selectMatches
+
+すべてのマッチを同時に選択し、複数選択を作成します。
+
+```ts
+import { selectMatches } from "@codemirror/search";
+
+selectMatches(view);
+```
+
+## 検索の設定
+
+`search()` 関数は設定オブジェクトを受け取ります。
+
+```ts
+import { search } from "@codemirror/search";
+
+const extensions = [
+  search({
+    top: true,  // Show the search panel at the top of the editor (default: false)
+  }),
+];
+```
+
+### SearchQuery
+
+`SearchQuery` と `setSearchQuery` エフェクトを使って、検索の初期状態をプログラムで設定できます。
+
+```ts
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
+
+const query = new SearchQuery({
+  search: "hello",
+  caseSensitive: false,
+  regexp: false,
+  replace: "world",
+});
+
+view.dispatch({
+  effects: setSearchQuery.of(query),
+});
+```
+
+## 正規表現検索
+
+検索パネルには正規表現モードのトグルボタンがあります。有効にすると、検索文字列が正規表現として解釈されます。
+
+`SearchQuery` を使ってプログラムで正規表現検索を設定することもできます。
+
+```ts
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
+
+const query = new SearchQuery({
+  search: "\\bfunction\\s+\\w+",
+  regexp: true,
+});
+
+view.dispatch({
+  effects: setSearchQuery.of(query),
+});
+```
+
+正規表現検索は JavaScript の正規表現構文をサポートしています。キャプチャグループは置換文字列内で `$1`、`$2` などで参照できます。
+
+```ts
+const query = new SearchQuery({
+  search: "(\\w+)\\s*=\\s*(\\w+)",
+  regexp: true,
+  replace: "$2 = $1",  // Swap the two sides of the assignment
+});
+```
+
+## 検索パネルのスタイリング
+
+検索パネルはテーマでスタイルを設定できる CSS クラスでレンダリングされます。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const searchTheme = EditorView.theme({
+  ".cm-panels": {
+    backgroundColor: "#f5f5f5",
+    borderBottom: "1px solid #ddd",
+  },
+  ".cm-searchMatch": {
+    backgroundColor: "#ffd54f80",
+  },
+  ".cm-searchMatch-selected": {
+    backgroundColor: "#ff980080",
+  },
+});
+```
+
+- `.cm-panels` -- 検索パネルのコンテナ
+- `.cm-searchMatch` -- ドキュメント内のハイライトされた検索マッチ
+- `.cm-searchMatch-selected` -- 現在選択されているマッチ
+
+## 検索の完全なセットアップ
+
+検索、選択ハイライト、キーバインディングを含む完全な例です。
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import {
+  search,
+  searchKeymap,
+  highlightSelectionMatches,
+} from "@codemirror/search";
+
+const state = EditorState.create({
+  doc: "Search for text in this editor.",
+  extensions: [
+    search({ top: true }),
+    highlightSelectionMatches(),
+    keymap.of(searchKeymap),
+  ],
+});
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+以下のエディタで Ctrl-F（macOS では Cmd-F）を押して検索パネルを開いてみてください。テキストには検索できる繰り返しの単語が含まれています:
+
+<HtmlPreview
+  title="Search & Replace Demo"
+  height={350}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// Search demo: try Ctrl-F or Cmd-F to find text\\nconst fruits = ["apple", "banana", "cherry"];\\nconst colors = ["red", "yellow", "red"];\\n\\nfunction findItem(list, item) {\\n  return list.filter(entry => entry === item);\\n}\\n\\n// Find all red items\\nconst redItems = findItem(colors, "red");\\nconsole.log("Found:", redItems);\\n\\n// Find all apple entries\\nconst apples = findItem(fruits, "apple");\\nconsole.log("Apples:", apples);\\n',
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+        CM.search({ top: true }),
+        CM.highlightSelectionMatches(),
+        CM.keymap.of(CM.searchKeymap),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup, keymap } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+    import {
+      search,
+      searchKeymap,
+      highlightSelectionMatches,
+    } from "@codemirror/search";
+
+    const view = new EditorView({
+      doc: '// Search demo: try Ctrl-F or Cmd-F to find text\\nconst fruits = ["apple", "banana", "cherry"];\\nconst colors = ["red", "yellow", "red"];\\n\\nfunction findItem(list, item) {\\n  return list.filter(entry => entry === item);\\n}\\n\\n// Find all red items\\nconst redItems = findItem(colors, "red");\\nconsole.log("Found:", redItems);\\n\\n// Find all apple entries\\nconst apples = findItem(fruits, "apple");\\nconsole.log("Apples:", apples);\\n',
+      extensions: [
+        basicSetup,
+        javascript(),
+        search({ top: true }),
+        highlightSelectionMatches(),
+        keymap.of(searchKeymap),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>

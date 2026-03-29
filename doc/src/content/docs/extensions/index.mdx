@@ -1,0 +1,228 @@
+---
+title: Built-in Extensions
+description: "Common built-in extensions for CodeMirror 6: line numbers, active line highlighting, selection matches, history, bracket handling, folding, and more."
+sidebar_position: 1
+---
+
+## Overview
+
+CodeMirror 6 ships no built-in behavior beyond rendering text. Every feature -- line numbers, bracket matching, undo/redo, code folding -- is provided through extensions. This page covers the most commonly used built-in extensions and how to compose them.
+
+## lineNumbers()
+
+Adds a gutter showing line numbers on the left side of the editor.
+
+```ts
+import { lineNumbers } from "@codemirror/view";
+
+const extensions = [lineNumbers()];
+```
+
+You can pass a `formatNumber` option to customize how line numbers display:
+
+```ts
+lineNumbers({
+  formatNumber: (n) => String(n).padStart(3, "0"),
+})
+```
+
+## highlightActiveLine()
+
+Highlights the line where the cursor is currently positioned by applying a CSS class (`.cm-activeLine`) to it.
+
+```ts
+import { highlightActiveLine } from "@codemirror/view";
+
+const extensions = [highlightActiveLine()];
+```
+
+## highlightSelectionMatches()
+
+When text is selected, this extension highlights all other occurrences of the same text in the document.
+
+```ts
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const extensions = [highlightSelectionMatches()];
+```
+
+## drawSelection()
+
+Replaces the browser's native selection with a custom-drawn selection. This gives CodeMirror full control over how the cursor and selection look, which is important for consistent behavior across browsers and for supporting multiple cursors.
+
+```ts
+import { drawSelection } from "@codemirror/view";
+
+const extensions = [drawSelection()];
+```
+
+<Note>
+
+`drawSelection()` is included in `basicSetup`. If you are using `basicSetup`, you do not need to add it separately.
+
+</Note>
+
+## scrollPastEnd()
+
+Allows the user to scroll the editor past the last line. Without this, the last line is always pinned to the bottom of the viewport, which can feel cramped. With it, the user can scroll until the last line sits at the top of the editor.
+
+```ts
+import { scrollPastEnd } from "@codemirror/view";
+
+const extensions = [scrollPastEnd()];
+```
+
+## history() and historyKeymap
+
+`history()` adds undo/redo support. `historyKeymap` provides the standard key bindings for it (Ctrl-Z / Cmd-Z for undo, Ctrl-Y / Cmd-Shift-Z for redo).
+
+```ts
+import { history, historyKeymap } from "@codemirror/commands";
+import { keymap } from "@codemirror/view";
+
+const extensions = [
+  history(),
+  keymap.of(historyKeymap),
+];
+```
+
+The `history()` function accepts a configuration object:
+
+```ts
+history({
+  minDepth: 100,  // Minimum number of undo events to keep (default: 100)
+  newGroupDelay: 500,  // Milliseconds after which a new undo group starts (default: 500)
+})
+```
+
+## closeBrackets()
+
+Automatically inserts a closing bracket when the user types an opening bracket. Handles `()`, `[]`, `{}`, `""`, and `''`.
+
+```ts
+import { closeBrackets } from "@codemirror/autocomplete";
+
+const extensions = [closeBrackets()];
+```
+
+## bracketMatching()
+
+When the cursor is next to a bracket, this extension highlights the matching bracket. It handles `()`, `[]`, and `{}` by default.
+
+```ts
+import { bracketMatching } from "@codemirror/language";
+
+const extensions = [bracketMatching()];
+```
+
+## indentOnInput()
+
+Re-indents the current line when the user types a character that triggers re-indentation (such as a closing brace `}`). The language's indentation rules determine the correct indent level.
+
+```ts
+import { indentOnInput } from "@codemirror/language";
+
+const extensions = [indentOnInput()];
+```
+
+## foldGutter()
+
+Adds a gutter with fold/unfold markers next to code blocks that can be collapsed (functions, classes, objects, etc.). Folding is determined by the active language's syntax tree.
+
+```ts
+import { foldGutter } from "@codemirror/language";
+
+const extensions = [foldGutter()];
+```
+
+## EditorView.lineWrapping
+
+A static extension that enables soft line wrapping. Without it, long lines extend beyond the visible area and require horizontal scrolling.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const extensions = [EditorView.lineWrapping];
+```
+
+<Tip>
+
+`EditorView.lineWrapping` is not a function call -- it is a pre-built extension value. You pass it directly, without `()`.
+
+</Tip>
+
+## EditorView.updateListener
+
+Registers a callback that runs after every state update. This is useful for reacting to changes outside the editor, such as syncing content to a save mechanism or updating external UI.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const extensions = [
+  EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      console.log("Document changed:", update.state.doc.toString());
+    }
+  }),
+];
+```
+
+The `ViewUpdate` object passed to the listener contains:
+
+- `update.docChanged` -- whether the document changed
+- `update.selectionSet` -- whether the selection changed
+- `update.state` -- the new editor state
+- `update.startState` -- the state before the update
+- `update.changes` -- the document changes (if any)
+
+## Composing Extensions Together
+
+Extensions are arrays that flatten when nested. This makes it straightforward to group related extensions into reusable bundles.
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { bracketMatching, indentOnInput, foldGutter } from "@codemirror/language";
+import { closeBrackets } from "@codemirror/autocomplete";
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const coreExtensions = [
+  lineNumbers(),
+  highlightActiveLine(),
+  drawSelection(),
+  history(),
+  keymap.of([...defaultKeymap, ...historyKeymap]),
+];
+
+const editingExtensions = [
+  bracketMatching(),
+  closeBrackets(),
+  indentOnInput(),
+  foldGutter(),
+  highlightSelectionMatches(),
+];
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    coreExtensions,
+    editingExtensions,
+    EditorView.lineWrapping,
+  ],
+});
+```
+
+The `basicSetup` export from the `codemirror` package is itself a pre-composed bundle of these common extensions. If you want full control over which extensions are active, compose your own set instead of using `basicSetup`.
+
+```ts
+import { basicSetup } from "codemirror";
+
+// basicSetup includes: lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
+// history, foldGutter, drawSelection, dropCursor, allowMultipleSelections,
+// indentOnInput, syntaxHighlighting (defaultHighlightStyle), bracketMatching,
+// closeBrackets, autocompletion, rectangularSelection, crosshairCursor,
+// highlightActiveLine, highlightSelectionMatches, keymap.of([...closeBracketsKeymap,
+// ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap,
+// ...lintKeymap])
+```

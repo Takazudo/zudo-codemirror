@@ -1,0 +1,255 @@
+---
+title: Installation
+description: How to install CodeMirror 6 packages and set up a basic editor.
+sidebar_position: 2
+---
+
+## Quick Start with the Meta-Package
+
+The fastest way to get started is to install the `codemirror` meta-package along with a language package for whatever language you want to edit.
+
+<Tabs>
+
+<TabItem label="npm">
+
+```bash
+npm install codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```bash
+pnpm add codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```bash
+yarn add codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+
+</Tabs>
+
+This gives you `EditorView`, `EditorState`, `basicSetup`, and the core dependencies.
+
+## Essential Packages
+
+If you prefer to install packages individually for tighter control over your bundle, these are the minimum packages for a working editor:
+
+```bash
+npm install @codemirror/state @codemirror/view @codemirror/commands
+```
+
+For a more complete setup with syntax highlighting and common features, add these:
+
+```bash
+npm install @codemirror/language @codemirror/search @codemirror/autocomplete @codemirror/lint
+```
+
+### Package Purposes
+
+- `@codemirror/state` - EditorState, Transaction, state fields, facets
+- `@codemirror/view` - EditorView, decorations, keymaps, line numbers, DOM handling
+- `@codemirror/commands` - Standard editing commands (defaultKeymap, undo, redo, indentation)
+- `@codemirror/language` - Syntax highlighting, indentation, code folding infrastructure
+- `@codemirror/search` - Search/replace panel and commands
+- `@codemirror/autocomplete` - Autocompletion dropdown and sources
+- `@codemirror/lint` - Linting and diagnostic display
+
+## Language Packages
+
+Install a language package for each language you want to support. Each provides syntax highlighting, indentation rules, and language-specific features.
+
+```bash
+# JavaScript / TypeScript
+npm install @codemirror/lang-javascript
+
+# HTML
+npm install @codemirror/lang-html
+
+# CSS
+npm install @codemirror/lang-css
+
+# JSON
+npm install @codemirror/lang-json
+
+# Python
+npm install @codemirror/lang-python
+
+# Markdown
+npm install @codemirror/lang-markdown
+```
+
+## Markdown Editing Setup
+
+For a markdown editor, install the markdown language package and its dependency for code block highlighting:
+
+```bash
+npm install codemirror @codemirror/lang-markdown @codemirror/language-data
+```
+
+`@codemirror/language-data` provides language descriptions for all supported languages. The markdown language package uses it to syntax-highlight fenced code blocks.
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const view = new EditorView({
+  doc: "# Hello Markdown\n\nType here...",
+  extensions: [
+    basicSetup,
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: languages,
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+## Vim Mode
+
+Vim keybindings are provided by the `@replit/codemirror-vim` package, maintained by Replit:
+
+```bash
+npm install @replit/codemirror-vim
+```
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { vim } from "@replit/codemirror-vim";
+
+const view = new EditorView({
+  doc: "// Press Escape, then :q to quit\n",
+  extensions: [
+    vim(),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+<Note>
+
+The `vim()` extension should come before `basicSetup` in the extensions array. This ensures that vim keybindings take priority over the default keymap.
+
+</Note>
+
+## TypeScript
+
+All CodeMirror 6 packages include their TypeScript type declarations. There are no separate `@types/` packages to install. Type checking and autocompletion work out of the box in any TypeScript-aware editor.
+
+## Minimal Editor Example
+
+Here is a complete minimal example that creates a JavaScript editor with standard features:
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+
+const view = new EditorView({
+  doc: `function greet(name) {
+  console.log("Hello, " + name + "!");
+}
+
+greet("world");
+`,
+  extensions: [basicSetup, javascript()],
+  parent: document.getElementById("editor"),
+});
+```
+
+This requires a bundler (Vite, webpack, esbuild, Rollup, etc.) to resolve the npm imports. The editor renders into the DOM element with `id="editor"`.
+
+Try the live editor below -- it runs the same code with `basicSetup` and JavaScript language support:
+
+<HtmlPreview
+  title="Minimal JavaScript Editor"
+  height={280}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: 'function greet(name) {\\n  console.log("Hello, " + name + "!");\\n}\\n\\ngreet("world");\\n',
+      extensions: [CM.basicSetup, CM.javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: 'function greet(name) {\\n  console.log("Hello, " + name + "!");\\n}\\n\\ngreet("world");\\n',
+      extensions: [basicSetup, javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+### HTML Page Setup
+
+The host HTML page needs a container element and the bundled script:
+
+```html
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>CodeMirror Editor</title>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script type="module" src="./editor.js"></script>
+  </body>
+</html>
+```
+
+### Styling the Container
+
+CodeMirror renders its own UI inside the container element. You can constrain the editor height and add a border with CSS:
+
+```css
+#editor {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+/* Fix the editor to a specific height with scrolling */
+.cm-editor {
+  height: 300px;
+}
+
+/* Or let it grow with content (no fixed height) */
+.cm-editor {
+  max-height: 500px;
+}
+```
+
+If you do not set a height on `.cm-editor`, the editor expands to fit its content.
+
+## Bundler Configuration
+
+CodeMirror packages are distributed as ES modules. Any modern bundler handles them without special configuration.
+
+### Vite
+
+No extra configuration needed. Vite resolves ES modules natively.
+
+### webpack
+
+Ensure your webpack configuration includes `node_modules` in module resolution (this is the default). No special loaders are required.
+
+### esbuild
+
+```bash
+esbuild editor.ts --bundle --outfile=editor.js --format=esm
+```
+
+## Next Steps
+
+- [Quick Reference](./quick-reference) - Common patterns and frequently used operations

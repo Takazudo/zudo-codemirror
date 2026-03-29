@@ -1,0 +1,220 @@
+---
+title: Tauri / WebView Integration
+description: "Patterns for running CodeMirror 6 inside Tauri and WebView-based desktop applications: zoom fixes, focus management, native menus, and file system operations."
+sidebar_position: 4
+---
+
+# Tauri / WebView Integration
+
+Running CodeMirror inside a Tauri app (or any WebView-based desktop shell) introduces platform-specific issues that do not appear in regular browser environments. This page covers the most common ones.
+
+## CSS Zoom Mouse Coordinate Fix
+
+Tauri apps that use CSS `zoom` on `document.body` to implement UI scaling break CodeMirror's mouse coordinate calculations. CodeMirror reads `clientX` and `clientY` from mouse events to determine cursor positions, but WebKit does not adjust these values for CSS zoom. The result is that clicking in the editor places the cursor at the wrong position -- the offset grows as zoom moves away from `1`.
+
+The fix intercepts `mousedown` and `mousemove` events on the editor and adjusts the coordinates by dividing by the current zoom factor.
+
+```ts
+import { Extension } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+function zoomMouseFix(): Extension {
+  const adjustForZoom = (event: MouseEvent) => {
+    const zoom = parseFloat(document.body.style.zoom || "1") || 1;
+    if (zoom === 1) return false;
+    Object.defineProperty(event, "clientX", {
+      value: event.clientX / zoom,
+      configurable: true,
+    });
+    Object.defineProperty(event, "clientY", {
+      value: event.clientY / zoom,
+      configurable: true,
+    });
+    return false;
+  };
+  return EditorView.domEventHandlers({
+    mousedown: adjustForZoom,
+    mousemove: adjustForZoom,
+  });
+}
+```
+
+The handler returns `false` so that CodeMirror continues processing the event with the corrected coordinates.
+
+<Warning>
+
+This issue is specific to WebKit's handling of CSS `zoom`. Chromium-based browsers (and by extension, Electron) handle CSS zoom differently and may not need this fix. Test on your target platform.
+
+</Warning>
+
+## Focus Management in Desktop Apps
+
+Desktop apps have different focus semantics than browser tabs. In a Tauri app, the WebView may lose focus when the user interacts with native UI elements (title bar buttons, native menus, system dialogs). When focus returns to the WebView, the editor may not automatically regain focus.
+
+Handle this by listening for the Tauri window focus event and explicitly focusing the editor:
+
+```ts
+import { listen } from "@tauri-apps/api/event";
+import { EditorView } from "@codemirror/view";
+
+async function setupFocusManagement(view: EditorView) {
+  await listen("tauri://focus", () => {
+    // Only refocus if the editor was the last focused element
+    if (document.activeElement === document.body) {
+      view.focus();
+    }
+  });
+}
+```
+
+If your application has multiple focusable panels (sidebar, file tree, settings), track which panel was last focused and restore focus to the correct one.
+
+### Focus on Window Show
+
+When a Tauri window is hidden and shown again (for example, a tray-based application), the editor needs to be focused after the window becomes visible:
+
+```ts
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+const appWindow = getCurrentWindow();
+appWindow.listen("tauri://focus", () => {
+  // Small delay to ensure the WebView has fully rendered
+  requestAnimationFrame(() => {
+    view.focus();
+  });
+});
+```
+
+## Integration with Native Menus
+
+Tauri applications often have native menu bars with Edit menu items (Undo, Redo, Cut, Copy, Paste, Select All). These native menu items dispatch browser-level events that CodeMirror handles natively for Cut, Copy, Paste, and Select All. However, Undo and Redo need special handling because CodeMirror maintains its own history stack, separate from the browser's built-in undo.
+
+Listen for Tauri menu events and dispatch the corresponding CodeMirror commands:
+
+```ts
+import { listen } from "@tauri-apps/api/event";
+import { undo, redo } from "@codemirror/commands";
+
+async function setupMenuIntegration(view: EditorView) {
+  await listen("menu-undo", () => {
+    undo(view);
+  });
+
+  await listen("menu-redo", () => {
+    redo(view);
+  });
+
+  await listen("menu-save", () => {
+    const content = view.state.doc.toString();
+    onSave(content);
+  });
+}
+```
+
+<Note>
+
+The native Cut/Copy/Paste menu items work without extra code because they trigger the browser's clipboard events, which CodeMirror already handles. Only Undo, Redo, and application-specific commands (Save, Find) need custom event listeners.
+
+</Note>
+
+## File System Operations
+
+In a Tauri editor, loading and saving files goes through Tauri's IPC bridge rather than fetch or XMLHttpRequest.
+
+### Loading a File
+
+```ts
+import { readTextFile } from "@tauri-apps/plugin-fs";
+
+async function loadFile(view: EditorView, filePath: string) {
+  const content = await readTextFile(filePath);
+  view.dispatch({
+    changes: {
+      from: 0,
+      to: view.state.doc.length,
+      insert: content,
+    },
+  });
+}
+```
+
+### Saving a File
+
+```ts
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+
+async function saveFile(view: EditorView, filePath: string) {
+  const content = view.state.doc.toString();
+  await writeTextFile(filePath, content);
+}
+```
+
+### File Dialog Integration
+
+Use Tauri's dialog plugin to open file picker dialogs:
+
+```ts
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+
+async function openFileDialog(view: EditorView) {
+  const filePath = await open({
+    multiple: false,
+    filters: [
+      { name: "Markdown", extensions: ["md", "mdx", "markdown"] },
+      { name: "Text", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+
+  if (typeof filePath === "string") {
+    const content = await readTextFile(filePath);
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: content,
+      },
+    });
+    return filePath;
+  }
+  return null;
+}
+
+async function saveFileDialog(view: EditorView) {
+  const filePath = await save({
+    filters: [
+      { name: "Markdown", extensions: ["md"] },
+      { name: "Text", extensions: ["txt"] },
+    ],
+  });
+
+  if (filePath) {
+    const content = view.state.doc.toString();
+    await writeTextFile(filePath, content);
+    return filePath;
+  }
+  return null;
+}
+```
+
+## Keybinding Considerations
+
+Desktop editors typically bind `Cmd-S` / `Ctrl-S` to save. In a Tauri app, this keybinding can be handled at the CodeMirror level, the Tauri menu level, or both. If you define it in both places, the CodeMirror keymap intercepts the event first and should call `preventDefault()` to stop it from propagating to the native menu handler.
+
+```ts
+import { keymap } from "@codemirror/view";
+
+const desktopKeymap = keymap.of([
+  {
+    key: "Mod-s",
+    run(view) {
+      const content = view.state.doc.toString();
+      onSave(content);
+      return true; // returning true prevents further handling
+    },
+  },
+]);
+```
+
+`Mod` maps to `Cmd` on macOS and `Ctrl` on other platforms.

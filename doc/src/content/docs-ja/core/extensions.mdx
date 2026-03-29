@@ -1,0 +1,460 @@
+---
+title: Extension
+description: "CodeMirror 6 の Extension システム: Facet、StateField、ViewPlugin、Compartment、優先度、組み込み Extension。"
+sidebar_position: 5
+---
+
+# Extension
+
+CodeMirror 6 には組み込みの動作がほとんどありません。行番号、シンタックスハイライト、キーバインディング、undo 履歴など、これらはすべて Extension です。Extension システムは、エディタを設定・カスタマイズするための主要な方法です。
+
+## Extension とは
+
+Extension は `EditorState.create()` の `extensions` 配列に渡す値です。以下のいずれかになります:
+
+- Facet の値（`facet.of(value)` で作成）
+- StateField（`StateField.define()` で作成）
+- ViewPlugin（`ViewPlugin.define()` または `ViewPlugin.fromClass()` で作成）
+- 他の Extension の配列（ネストされた配列はフラットに展開される）
+- Compartment ラッパー（`compartment.of(extension)` で作成）
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let view = new EditorView({
+  extensions: [
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+    EditorView.lineWrapping,
+    EditorState.tabSize.of(2),
+  ],
+  parent: document.body,
+});
+```
+
+## Extension の配列
+
+Extension はフラットな配列で合成されます。ネストが許可されており、CodeMirror がすべての配列をフラットに展開します:
+
+```ts
+let editorSetup = [lineNumbers(), EditorView.lineWrapping];
+
+let keybindings = [keymap.of(defaultKeymap)];
+
+// These are equivalent:
+let extensions = [editorSetup, keybindings];
+// Flattens to: [lineNumbers(), EditorView.lineWrapping, keymap.of(defaultKeymap)]
+```
+
+これにより、再利用可能な Extension バンドルを配列として自然に作成できます。
+
+## Compartment
+
+Compartment を使用すると、エディタの作成後に Extension を再設定できます。Extension を Compartment でラップし、後で Effect を dispatch して置き換えます。
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+let language = new Compartment();
+let tabSize = new Compartment();
+
+let view = new EditorView({
+  extensions: [
+    language.of([]),
+    tabSize.of(EditorState.tabSize.of(4)),
+  ],
+  parent: document.body,
+});
+```
+
+Compartment の `reconfigure` Effect を dispatch して再設定します:
+
+```ts
+// Change tab size to 2
+view.dispatch({
+  effects: tabSize.reconfigure(EditorState.tabSize.of(2)),
+});
+
+// Load a language
+import { javascript } from "@codemirror/lang-javascript";
+
+view.dispatch({
+  effects: language.reconfigure(javascript()),
+});
+
+// Remove the language (pass empty extension)
+view.dispatch({
+  effects: language.reconfigure([]),
+});
+```
+
+`compartment.get()` で Compartment の現在の内容を読み取ることができます:
+
+```ts
+let currentLang = language.get(view.state);
+```
+
+<Tip>
+
+Compartment は、Extension のオン/オフの切り替えや設定の動的な変更を行うための意図された方法です。設定を変更するためにエディタ全体を再作成しないでください。
+
+</Tip>
+
+## Facet
+
+Facet は、複数のソースから値を収集し、単一の出力に結合する名前付きの拡張ポイントです。Facet は `Facet.define()` で定義します。
+
+#### 組み込みの Facet
+
+CodeMirror にはいくつかの組み込み Facet があります:
+
+- `EditorState.tabSize` -- タブ文字の幅（デフォルト: 4）
+- `EditorState.readOnly` -- エディタが読み取り専用かどうか
+- `EditorState.phrases` -- 翻訳文字列
+- `EditorState.languageData` -- 言語固有の設定
+- `EditorView.contentAttributes` -- コンテンツ要素の HTML 属性
+- `EditorView.editorAttributes` -- エディタラッパーの HTML 属性
+- `EditorView.decorations` -- Extension が提供する Decoration
+- `EditorView.updateListener` -- 状態更新のコールバック
+
+#### Facet の使い方
+
+`.of()` で Facet に値を提供します:
+
+```ts
+let ext = EditorState.tabSize.of(2);
+```
+
+`state.facet()` で Facet の値を読み取ります:
+
+```ts
+let size = state.facet(EditorState.tabSize); // 2
+```
+
+#### カスタム Facet の定義
+
+```ts
+import { Facet } from "@codemirror/state";
+
+// A facet that combines values by taking the first one
+let maxLineLength = Facet.define({
+  combine: (values) => (values.length ? Math.min(...values) : 80),
+});
+
+// Provide a value
+let ext = maxLineLength.of(120);
+
+// Read the combined value
+let max = state.facet(maxLineLength);
+```
+
+`combine` 関数は提供されたすべての値を受け取り、単一の結果を返します。一般的な結合戦略:
+
+- 最初の値を採用する（単一値の設定の場合）
+- 配列に収集する（複数値の設定の場合）
+- マージまたはリデュースする（集約された設定の場合）
+
+#### 計算された Facet
+
+Facet は状態の他の部分から値を導出できます:
+
+```ts
+let lineCount = Facet.define({
+  combine: (values) => values[0],
+});
+
+let computedLineCount = lineCount.compute(["doc"], (state) => {
+  return state.doc.lines;
+});
+```
+
+## StateField
+
+StateField は各 Transaction で更新される値を保持します。更新をまたいでカスタムの状態を維持するための主要な方法です。
+
+```ts
+import { StateField } from "@codemirror/state";
+
+let wordCount = StateField.define({
+  create(state) {
+    return countWords(state.doc.toString());
+  },
+  update(value, tr) {
+    if (tr.docChanged) {
+      return countWords(tr.state.doc.toString());
+    }
+    return value;
+  },
+});
+
+function countWords(text) {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+```
+
+StateField は `provide` オプションを通じて Extension を提供することもできます:
+
+```ts
+let myField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decos, tr) {
+    // update decorations...
+    return decos;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+```
+
+## ViewPlugin
+
+ViewPlugin は View の更新に応じてコードを実行し、DOM にアクセスできます。StateField では処理できない副作用が必要な場合に使用します。
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+let charCounter = ViewPlugin.fromClass(
+  class {
+    dom;
+
+    constructor(view) {
+      this.dom = document.createElement("div");
+      this.dom.className = "char-count";
+      this.dom.textContent = `${view.state.doc.length} chars`;
+      view.dom.appendChild(this.dom);
+    }
+
+    update(update) {
+      if (update.docChanged) {
+        this.dom.textContent = `${update.state.doc.length} chars`;
+      }
+    }
+
+    destroy() {
+      this.dom.remove();
+    }
+  }
+);
+```
+
+ViewPlugin は spec を通じて Decoration、イベントハンドラ、その他の View レベルの値を提供することもできます:
+
+```ts
+let myPlugin = ViewPlugin.fromClass(MyPluginClass, {
+  decorations: (plugin) => plugin.decorations,
+  eventHandlers: {
+    click(event, view) {
+      // handle click
+      return false;
+    },
+  },
+});
+```
+
+## Extension の優先度
+
+複数の Extension が同じ Facet やキーマップに値を提供する場合、順序が重要です。デフォルトでは、先にリストされた Extension が優先されます。`Prec` を使用してこれをオーバーライドできます:
+
+```ts
+import { Prec } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+
+let myKeymap = keymap.of([
+  { key: "Ctrl-s", run: () => { console.log("save"); return true; } },
+]);
+
+// Ensure this keymap takes priority over others
+let highPriority = Prec.high(myKeymap);
+
+// Or guarantee it runs first
+let highest = Prec.highest(myKeymap);
+```
+
+優先度レベルは高い順に:
+
+- `Prec.highest`
+- `Prec.high`
+- （デフォルト -- ラッパーなし）
+- `Prec.low`
+- `Prec.lowest`
+
+## 組み込み Extension
+
+CodeMirror はパッケージ全体にわたって多くの Extension を提供しています:
+
+`@codemirror/view` から:
+
+- `lineNumbers()` -- 行番号のガター
+- `highlightActiveLine()` -- カーソルのある行をハイライト
+- `highlightActiveLineGutter()` -- アクティブな行のガターをハイライト
+- `highlightSpecialChars()` -- 制御文字を可視的にレンダリング
+- `drawSelection()` -- カスタムの選択描画（複数選択に必要）
+- `dropCursor()` -- ドラッグ&ドロップ中にカーソル位置を表示
+- `rectangularSelection()` -- Alt+ドラッグによる矩形選択
+- `crosshairCursor()` -- Alt+ドラッグ中の十字カーソル
+- `EditorView.lineWrapping` -- ソフト行折り返しを有効化
+- `placeholder(text)` -- エディタが空の場合のプレースホルダーテキスト
+
+`@codemirror/commands` から:
+
+- `history()` -- undo/redo サポート
+- `defaultKeymap` -- 標準的な編集キーバインディング
+- `historyKeymap` -- Ctrl-Z / Ctrl-Y キーバインディング
+
+`@codemirror/search` から:
+
+- `search()` -- 検索と置換パネル
+- `searchKeymap` -- Ctrl-F / Ctrl-H キーバインディング
+- `highlightSelectionMatches()` -- 選択範囲に一致するテキストをハイライト
+
+`@codemirror/autocomplete` から:
+
+- `autocompletion()` -- オートコンプリートのポップアップ
+- `closeBrackets()` -- 括弧と引用符の自動閉じ
+- `closeBracketsKeymap` -- 関連するキーバインディング
+
+`@codemirror/language` から:
+
+- `bracketMatching()` -- 対応する括弧のハイライト
+- `foldGutter()` -- コード折りたたみのガター
+- `indentOnInput()` -- 特定の文字の入力後に再インデント
+- `syntaxHighlighting()` -- 構文木にハイライトスタイルを適用
+
+`@codemirror/lint` から:
+
+- `linter()` -- Lint 関数を実行して診断を表示
+- `lintGutter()` -- ガターに Lint マーカーを表示
+
+## basicSetup と minimalSetup
+
+`codemirror` パッケージは 2 つの便利なバンドルをエクスポートしています:
+
+#### basicSetup
+
+ほとんどのユースケースに適した包括的な Extension セット:
+
+```ts
+import { basicSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [basicSetup],
+  parent: document.body,
+});
+```
+
+`basicSetup` には、行番号、アクティブ行のハイライト、履歴、括弧のマッチング、オートコンプリート、検索、その他多くの一般的な Extension が含まれています。
+
+#### minimalSetup
+
+軽量なエディタ向けのより小さなセット:
+
+```ts
+import { minimalSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [minimalSetup],
+  parent: document.body,
+});
+```
+
+`minimalSetup` には、デフォルトキーマップ、履歴、選択描画、ドロップカーソル、特殊文字のハイライト、undo/redo、括弧のマッチングのみが含まれています。
+
+<Note>
+
+どちらのバンドルも単なる Extension の配列です。独自の配列にスプレッドして、特定の Extension を追加またはオーバーライドできます。
+
+</Note>
+
+```ts
+import { basicSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [
+    basicSetup,
+    EditorView.lineWrapping,
+    EditorState.tabSize.of(2),
+    // Additional extensions...
+  ],
+  parent: document.body,
+});
+```
+
+## 例: カスタム Extension の作成
+
+以下は、ドキュメントが初期コンテンツから変更されたかどうかを追跡する StateField と、DOM にインジケーターを表示する ViewPlugin を組み合わせた例です:
+
+```ts
+import { StateField, StateEffect } from "@codemirror/state";
+import { EditorView, ViewPlugin } from "@codemirror/view";
+
+// Effect to mark the document as "saved"
+let markSaved = StateEffect.define();
+
+// State field tracking dirty status
+let dirtyField = StateField.define({
+  create() {
+    return false;
+  },
+  update(isDirty, tr) {
+    for (let effect of tr.effects) {
+      if (effect.is(markSaved)) return false;
+    }
+    if (tr.docChanged) return true;
+    return isDirty;
+  },
+});
+
+// View plugin showing dirty indicator
+let dirtyIndicator = ViewPlugin.fromClass(
+  class {
+    dom;
+
+    constructor(view) {
+      this.dom = document.createElement("div");
+      this.dom.className = "dirty-indicator";
+      this.updateDisplay(view.state.field(dirtyField));
+      view.dom.parentNode?.insertBefore(this.dom, view.dom);
+    }
+
+    update(update) {
+      let dirty = update.state.field(dirtyField);
+      if (dirty !== update.startState.field(dirtyField)) {
+        this.updateDisplay(dirty);
+      }
+    }
+
+    updateDisplay(isDirty) {
+      this.dom.textContent = isDirty ? "Unsaved changes" : "Saved";
+    }
+
+    destroy() {
+      this.dom.remove();
+    }
+  }
+);
+
+// Bundle into a single extension
+function dirtyTracking() {
+  return [dirtyField, dirtyIndicator];
+}
+```
+
+使い方:
+
+```ts
+let view = new EditorView({
+  extensions: [basicSetup, dirtyTracking()],
+  parent: document.body,
+});
+
+// Later, mark as saved:
+view.dispatch({
+  effects: markSaved.of(null),
+});
+```

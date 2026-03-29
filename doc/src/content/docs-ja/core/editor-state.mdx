@@ -1,0 +1,272 @@
+---
+title: EditorState
+description: "CodeMirror 6 のイミュータブルな EditorState の作成と操作: ドキュメント、選択範囲、Extension、StateField。"
+sidebar_position: 2
+---
+
+# EditorState
+
+`EditorState` は CodeMirror 6 の中心にあるイミュータブルなデータ構造です。ドキュメントの内容、選択範囲、すべての Extension が管理する状態を保持します。`EditorState` を直接変更することはありません。代わりに、新しい状態オブジェクトを生成する Transaction を作成します。
+
+`@codemirror/state` から import します:
+
+```ts
+import { EditorState } from "@codemirror/state";
+```
+
+## EditorState の作成
+
+`EditorState.create()` を使用して初期状態を作成します。`doc`、`selection`、`extensions` フィールドを持つオプションの設定オブジェクトを受け取ります。
+
+```ts
+let state = EditorState.create({
+  doc: "Hello World",
+  extensions: [
+    // your extensions here
+  ],
+});
+```
+
+すべてのフィールドはオプションです。`doc` を省略すると、空のドキュメントで状態が開始されます。`extensions` を省略すると、デフォルト以外の設定された動作を持たない状態になります。
+
+```ts
+// Minimal state with no document and no extensions
+let empty = EditorState.create();
+console.log(empty.doc.toString()); // ""
+```
+
+初期選択範囲を指定することもできます:
+
+```ts
+import { EditorSelection } from "@codemirror/state";
+
+let state = EditorState.create({
+  doc: "Hello World",
+  selection: EditorSelection.cursor(5), // cursor after "Hello"
+});
+```
+
+## doc フィールド
+
+`state.doc` はプレーンな文字列ではなく `Text` オブジェクトです。`Text` 型はドキュメントを行のツリーとして表現しており、大きなドキュメントでも効率的に処理できます。
+
+```ts
+let state = EditorState.create({ doc: "line one\nline two\nline three" });
+
+// Total character length
+console.log(state.doc.length); // 28
+
+// Number of lines
+console.log(state.doc.lines); // 3
+
+// Get a specific line (1-based indexing)
+let line = state.doc.line(2);
+console.log(line.text); // "line two"
+console.log(line.from); // 9
+console.log(line.to); // 17
+
+// Convert to string
+console.log(state.doc.toString());
+
+// Get the line at a character position
+let lineAtPos = state.doc.lineAt(10);
+console.log(lineAtPos.number); // 2
+```
+
+<Note>
+
+`Text` は 1 ベースの行番号を使用します。`state.doc.line(1)` は最初の行を返します。一方、文字位置はドキュメントの先頭からの 0 ベースのオフセットです。
+
+</Note>
+
+#### 行のイテレーション
+
+`iterLines()` や `iterRange()` を使用してドキュメントの範囲をイテレーションできます:
+
+```ts
+// Iterate over all lines
+for (let iter = state.doc.iterLines(); !iter.done; iter.next()) {
+  console.log(iter.value);
+}
+
+// Iterate character-by-character over a range
+for (let iter = state.doc.iterRange(0, 20); !iter.done; iter.next()) {
+  console.log(iter.value);
+}
+```
+
+#### ドキュメントのスライス
+
+`sliceString()` を使用して部分文字列を抽出します:
+
+```ts
+let text = state.doc.sliceString(9, 17);
+console.log(text); // "line two"
+```
+
+## selection フィールド
+
+`state.selection` は `EditorSelection` オブジェクトです。1 つ以上の選択範囲を含みます。各範囲には `anchor` と `head`（選択範囲の移動端）があります。
+
+```ts
+let state = EditorState.create({ doc: "Hello World" });
+
+// Default: cursor at position 0
+let sel = state.selection;
+console.log(sel.main.from); // 0
+console.log(sel.main.to); // 0
+console.log(sel.main.empty); // true (cursor, no selected text)
+```
+
+カーソルは `from` と `to` が同じ選択範囲です。空でない選択範囲は `from` と `to` が異なります:
+
+```ts
+import { EditorSelection } from "@codemirror/state";
+
+let state = EditorState.create({
+  doc: "Hello World",
+  selection: EditorSelection.single(0, 5), // "Hello" selected
+});
+console.log(state.selection.main.from); // 0
+console.log(state.selection.main.to); // 5
+console.log(state.selection.main.empty); // false
+```
+
+#### 複数選択
+
+CodeMirror 6 は複数選択をサポートしています。`selection.ranges` 配列がすべての範囲を保持し、`selection.main` がプライマリの範囲です:
+
+```ts
+let state = EditorState.create({
+  doc: "aaa bbb ccc",
+  selection: EditorSelection.create([
+    EditorSelection.range(0, 3),
+    EditorSelection.range(4, 7),
+    EditorSelection.range(8, 11),
+  ]),
+});
+
+console.log(state.selection.ranges.length); // 3
+console.log(state.selection.main.from); // 0
+```
+
+<Note>
+
+複数選択には `EditorState.allowMultipleSelections` Facet を有効にする必要があります。有効にしないと、メインの選択範囲のみが保持されます。
+
+</Note>
+
+## StateField の読み取り
+
+StateField は Extension が管理するカスタムの状態です。`state.field()` で読み取ります:
+
+```ts
+import { StateField } from "@codemirror/state";
+
+let changeCount = StateField.define({
+  create() {
+    return 0;
+  },
+  update(value, tr) {
+    return tr.docChanged ? value + 1 : value;
+  },
+});
+
+let state = EditorState.create({ extensions: [changeCount] });
+console.log(state.field(changeCount)); // 0
+
+state = state.update({ changes: { from: 0, insert: "x" } }).state;
+console.log(state.field(changeCount)); // 1
+```
+
+状態の Extension に含まれていない StateField を読み取ろうとすると、エラーがスローされます。第 2 引数に `false` を渡すと、代わりに `undefined` が返されます:
+
+```ts
+let value = state.field(someField, false);
+if (value !== undefined) {
+  // field is available
+}
+```
+
+## Facet の読み取り
+
+`state.facet()` を使用して設定された Facet の値を読み取ります:
+
+```ts
+console.log(state.facet(EditorState.tabSize)); // default: 4
+console.log(state.facet(EditorState.readOnly)); // default: false
+```
+
+## 設定された Extension
+
+`EditorState.create()` に渡した Extension は状態に組み込まれます。Compartment を使用しない限り、作成後に Extension を追加・削除することはできません（[Extension](./extensions.mdx) を参照）。
+
+```ts
+import { keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let state = EditorState.create({
+  doc: "Hello",
+  extensions: [
+    EditorState.tabSize.of(2),
+    EditorState.readOnly.of(true),
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+  ],
+});
+
+console.log(state.facet(EditorState.tabSize)); // 2
+console.log(state.facet(EditorState.readOnly)); // true
+```
+
+## 既存の状態から新しい状態を作成する
+
+`EditorState` はイミュータブルですが、Transaction を通じて新しい状態を導出できます:
+
+```ts
+let state1 = EditorState.create({ doc: "Hello" });
+let tr = state1.update({ changes: { from: 5, insert: " World" } });
+let state2 = tr.state;
+
+console.log(state1.doc.toString()); // "Hello"
+console.log(state2.doc.toString()); // "Hello World"
+```
+
+`state.toJSON()` と `EditorState.fromJSON()` を使用して、既存の状態から特定の設定を継承する新しい状態を `EditorState.create()` で構築することもできますが、これはあまり一般的ではありません。
+
+## 完全な例
+
+```ts
+import { EditorState, EditorSelection, StateField } from "@codemirror/state";
+import { keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+// Define a custom state field
+let docLength = StateField.define({
+  create(state) {
+    return state.doc.length;
+  },
+  update(_value, tr) {
+    return tr.state.doc.length;
+  },
+});
+
+// Create the state
+let state = EditorState.create({
+  doc: "function hello() {\n  return 'world';\n}",
+  selection: EditorSelection.cursor(0),
+  extensions: [
+    EditorState.tabSize.of(2),
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+    docLength,
+  ],
+});
+
+// Inspect the state
+console.log(state.doc.lines); // 3
+console.log(state.doc.line(1).text); // "function hello() {"
+console.log(state.selection.main.head); // 0
+console.log(state.facet(EditorState.tabSize)); // 2
+console.log(state.field(docLength)); // 38
+```

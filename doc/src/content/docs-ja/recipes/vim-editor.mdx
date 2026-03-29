@@ -1,0 +1,374 @@
+---
+title: 完全な Vim エディタのセットアップ
+description: ステータス表示、クリップボード同期、カスタムコマンド、vimrc、テーマ、設定駆動型の構成を備えたフル機能の Vim 対応 CodeMirror 6 エディタ。
+sidebar_position: 3
+---
+
+# 完全な Vim エディタのセットアップ
+
+このページでは、CodeMirror 6 でフル機能の Vim モードエディタを組み立てる方法を紹介します。`@replit/codemirror-vim` をステータスインジケーター、クリップボード同期、カスタム Ex コマンド、vimrc の読み込み、CSS 変数によるテーマ、行の折り返しトグル、設定可能な構成と組み合わせます。各セクションは独立しているため、個別に採用できます。
+
+## ステータスインジケーター付きの Vim モード
+
+組み込みのステータスパネルで Vim モードを有効にします。ステータスパネルには、現在のモード（Normal、Insert、Visual）、入力途中のコマンド、使用中のレジスタが表示されます。
+
+```ts
+import { vim } from "@replit/codemirror-vim";
+
+const vimExtension = vim({ status: true });
+```
+
+`vimExtension` は他のキーバインディング Extension より前に配置し、Vim のキー処理が優先されるようにします。
+
+## クリップボード同期
+
+デフォルトでは、Vim の yank と paste はシステムクリップボードとは分離された内部レジスタを使用します。Vim の無名レジスタ（`"`）をシステムクリップボードと同期するには、Clipboard API を使用してカスタムの `"*` と `"+` レジスタハンドラーを定義します。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+Vim.defineRegister("*", {
+  setText(text: string) {
+    navigator.clipboard.writeText(text);
+  },
+  getText() {
+    // Synchronous getText cannot await clipboard.readText().
+    // This fallback returns empty; paste with Ctrl-V or Cmd-V instead.
+    return "";
+  },
+});
+
+Vim.defineRegister("+", {
+  setText(text: string) {
+    navigator.clipboard.writeText(text);
+  },
+  getText() {
+    return "";
+  },
+});
+```
+
+<Note>
+
+Clipboard API の `readText()` は非同期ですが、Vim の `getText()` は同期です。`p`（Vim のペースト）でシステムクリップボードから読み取るクリーンな方法はありません。yank はクリップボードにコピーしますが、システムクリップボードからのペーストには `Ctrl-V` / `Cmd-V`（ブラウザのネイティブペースト）を使用する必要があります。アプリケーションがキーボード環境を完全に制御している場合（Tauri や Electron など）は、ペーストイベントをインターセプトし、Vim が読み取る前にレジスタに書き込むことで回避できます。
+
+</Note>
+
+## カスタム :w と :q コマンド
+
+`:w` でドキュメントを保存し、`:q` でエディタまたはアプリケーションウィンドウを閉じる Ex コマンドを定義します。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+Vim.defineEx("write", "w", (cm) => {
+  const content = cm.state.doc.toString();
+  // Pass to your save handler
+  onSave(content);
+});
+
+Vim.defineEx("quit", "q", () => {
+  // Close the editor pane, or close the window in desktop apps
+  onQuit();
+});
+
+Vim.defineEx("wq", "wq", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+  onQuit();
+});
+```
+
+`defineEx` の第 2 引数は短縮形です。この設定後、`:w`、`:write`、`:q`、`:quit`、`:wq` がすべて動作します。
+
+## vimrc のサポート
+
+`@replit/codemirror-vim` は vimrc スタイルの設定文字列の読み込みをサポートしています。ユーザーが Vim の設定をカスタマイズできるようにするのに便利です。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+const vimrc = `
+set number
+set ignorecase
+set smartcase
+imap jj <Esc>
+nmap ; :
+`;
+
+for (const line of vimrc.split("\n")) {
+  const trimmed = line.trim();
+  if (trimmed && !trimmed.startsWith('"')) {
+    Vim.handleEx(trimmed);
+  }
+}
+```
+
+`Vim.handleEx` は単一の Ex コマンド文字列を実行します。vimrc を行に分割して 1 行ずつ渡すことで、基本的な vimrc の互換性が得られます。すべての Vim コマンドがサポートされているわけではなく、サポートされる範囲は `@replit/codemirror-vim` の実装に依存します。
+
+## CSS 変数によるテーマ
+
+CSS 変数を使ってエディタの外観を定義することで、Extension を再構築せずにライト/ダークモードやユーザー設定に適応できるテーマを作成できます。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const themeExtension = EditorView.theme({
+  "&": {
+    color: "var(--editor-text)",
+    backgroundColor: "var(--editor-bg)",
+  },
+  ".cm-content": {
+    caretColor: "var(--editor-caret)",
+    fontFamily: "var(--editor-font-family)",
+    fontSize: "var(--editor-font-size)",
+    lineHeight: "var(--editor-line-height)",
+  },
+  ".cm-cursor": {
+    borderLeftColor: "var(--editor-caret)",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "var(--editor-active-line-bg)",
+  },
+  ".cm-gutters": {
+    backgroundColor: "var(--editor-gutter-bg)",
+    color: "var(--editor-gutter-text)",
+    borderRight: "none",
+  },
+  ".cm-activeLineGutter": {
+    backgroundColor: "var(--editor-active-line-bg)",
+  },
+  // Vim status bar
+  ".cm-panels-bottom .cm-panel": {
+    backgroundColor: "var(--editor-status-bg)",
+    color: "var(--editor-status-text)",
+  },
+});
+```
+
+対応する CSS 変数:
+
+```css
+:root {
+  --editor-bg: #1e1e2e;
+  --editor-text: #cdd6f4;
+  --editor-caret: #f5e0dc;
+  --editor-active-line-bg: rgba(255, 255, 255, 0.05);
+  --editor-gutter-bg: #1e1e2e;
+  --editor-gutter-text: #6c7086;
+  --editor-status-bg: #181825;
+  --editor-status-text: #a6adc8;
+  --editor-font-family: "JetBrains Mono", monospace;
+  --editor-font-size: 14px;
+  --editor-line-height: 1.6;
+}
+```
+
+## :set wrap による行の折り返しトグル
+
+行の折り返しのトグルをサポートするカスタム `:set` ハンドラーを追加します。`Compartment` を使って `EditorView.lineWrapping` Extension を動的に再設定します。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { Vim } from "@replit/codemirror-vim";
+
+const wrapCompartment = new Compartment();
+
+// Initial state: wrapping off
+const wrapExtension = wrapCompartment.of([]);
+
+// Define :set wrap and :set nowrap
+Vim.defineOption("wrap", false, "boolean", undefined, {
+  setCallback(_key: string, value: boolean, cm: any) {
+    const view = cm.cm6 as EditorView;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(
+        value ? EditorView.lineWrapping : []
+      ),
+    });
+  },
+});
+```
+
+この設定後、`:set wrap` で行の折り返しが有効になり、`:set nowrap` で無効になります。
+
+## 設定駆動型の構成
+
+ユーザー設定（フォントサイズ、フォントファミリー、行の高さ、パディング）を許可するエディタでは、設定可能なプロパティごとに Compartment を使用します。これにより、エディタを再作成せずに実行時に設定を変更できます。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+interface EditorSettings {
+  fontSize: number;
+  fontFamily: string;
+  lineHeight: number;
+  padding: number;
+}
+
+const fontSizeCompartment = new Compartment();
+const fontFamilyCompartment = new Compartment();
+const lineHeightCompartment = new Compartment();
+const paddingCompartment = new Compartment();
+
+function settingsExtensions(settings: EditorSettings) {
+  return [
+    fontSizeCompartment.of(
+      EditorView.theme({
+        ".cm-content": { fontSize: `${settings.fontSize}px` },
+        ".cm-gutters": { fontSize: `${settings.fontSize}px` },
+      })
+    ),
+    fontFamilyCompartment.of(
+      EditorView.theme({
+        ".cm-content": { fontFamily: settings.fontFamily },
+        ".cm-gutters": { fontFamily: settings.fontFamily },
+      })
+    ),
+    lineHeightCompartment.of(
+      EditorView.theme({
+        ".cm-content": { lineHeight: String(settings.lineHeight) },
+      })
+    ),
+    paddingCompartment.of(
+      EditorView.contentAttributes.of({
+        style: `padding: ${settings.padding}px`,
+      })
+    ),
+  ];
+}
+
+function applySettings(view: EditorView, settings: EditorSettings) {
+  view.dispatch({
+    effects: [
+      fontSizeCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { fontSize: `${settings.fontSize}px` },
+          ".cm-gutters": { fontSize: `${settings.fontSize}px` },
+        })
+      ),
+      fontFamilyCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { fontFamily: settings.fontFamily },
+          ".cm-gutters": { fontFamily: settings.fontFamily },
+        })
+      ),
+      lineHeightCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { lineHeight: String(settings.lineHeight) },
+        })
+      ),
+      paddingCompartment.reconfigure(
+        EditorView.contentAttributes.of({
+          style: `padding: ${settings.padding}px`,
+        })
+      ),
+    ],
+  });
+}
+```
+
+## 完全な例
+
+すべてのパーツを 1 つのエディタセットアップにまとめたものです。
+
+```ts
+import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentMore,
+  indentLess,
+} from "@codemirror/commands";
+import {
+  markdown,
+  markdownLanguage,
+  insertNewlineContinueMarkup,
+} from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+import { vim, Vim } from "@replit/codemirror-vim";
+
+// --- Configuration ---
+const wrapCompartment = new Compartment();
+
+// --- Vim customization ---
+Vim.defineEx("write", "w", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+});
+
+Vim.defineEx("quit", "q", () => {
+  onQuit();
+});
+
+Vim.defineEx("wq", "wq", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+  onQuit();
+});
+
+Vim.defineOption("wrap", false, "boolean", undefined, {
+  setCallback(_key: string, value: boolean, cm: any) {
+    const view = cm.cm6 as EditorView;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(
+        value ? EditorView.lineWrapping : []
+      ),
+    });
+  },
+});
+
+// --- Extensions ---
+const extensions = [
+  vim({ status: true }),
+  history(),
+  lineNumbers(),
+  markdown({ base: markdownLanguage, codeLanguages: languages }),
+  keymap.of([
+    ...defaultKeymap,
+    ...historyKeymap,
+    { key: "Enter", run: insertNewlineContinueMarkup },
+    { key: "Tab", run: indentMore },
+    { key: "Shift-Tab", run: indentLess },
+  ]),
+  wrapCompartment.of([]),
+  EditorView.contentAttributes.of({
+    autocorrect: "off",
+    autocomplete: "off",
+    autocapitalize: "off",
+    spellcheck: "false",
+    writingsuggestions: "false",
+  }),
+  EditorView.theme({
+    "&": {
+      color: "var(--editor-text)",
+      backgroundColor: "var(--editor-bg)",
+    },
+    ".cm-content": {
+      caretColor: "var(--editor-caret)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
+    },
+    ".cm-cursor": {
+      borderLeftColor: "var(--editor-caret)",
+    },
+    ".cm-gutters": {
+      backgroundColor: "var(--editor-gutter-bg)",
+      color: "var(--editor-gutter-text)",
+      borderRight: "none",
+    },
+  }),
+];
+
+// --- Create editor ---
+const state = EditorState.create({ doc: "", extensions });
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor")!,
+});
+```

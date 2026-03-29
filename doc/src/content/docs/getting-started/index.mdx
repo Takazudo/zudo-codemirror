@@ -1,0 +1,193 @@
+---
+title: Overview
+description: Introduction to CodeMirror 6 - architecture, key concepts, and the package ecosystem.
+sidebar_position: 1
+---
+
+## What Is CodeMirror 6
+
+CodeMirror 6 is a code editor component for the web. It is a complete rewrite of CodeMirror 5, sharing no code with the previous version. The project was redesigned from scratch with modern web standards, accessibility, mobile support, and extensibility as core goals.
+
+Key differences from CodeMirror 5:
+
+- Modular architecture - there is no single monolithic library. Each concern (state management, view rendering, language support, keybindings) lives in its own package
+- Immutable state model - editor state is represented as a persistent data structure, updated through transactions rather than in-place mutation
+- First-class TypeScript support - the entire codebase is written in TypeScript with full type declarations
+- Accessibility - screen reader support and ARIA attributes are built in from the ground level
+- Mobile support - touch input and virtual keyboards are handled natively, not as afterthoughts
+
+The official documentation is at [codemirror.net](https://codemirror.net/).
+
+## Key Concepts
+
+### EditorState
+
+`EditorState` represents the current state of the editor at a given point in time. It holds the document content, the current selection, and all active extensions and their associated state. EditorState is immutable - you never modify it directly. Instead, you create a new state by dispatching a transaction.
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+const state = EditorState.create({
+  doc: "Hello, world!",
+  extensions: [
+    // extensions go here
+  ],
+});
+```
+
+### EditorView
+
+`EditorView` is the UI component. It takes an `EditorState`, renders it to the DOM, and handles user interactions (typing, selection, scrolling). The view owns a state and updates it when the user interacts with the editor or when code dispatches a transaction.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+### Extensions
+
+Extensions are the primary mechanism for configuring and customizing the editor. Almost everything - keybindings, syntax highlighting, line numbers, bracket matching, autocompletion - is provided as an extension. Extensions are passed as an array when creating the state.
+
+```ts
+import { keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+import { lineNumbers } from "@codemirror/view";
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+  ],
+});
+```
+
+### Transactions
+
+A `Transaction` describes a state change. It can contain document changes, selection updates, or effects (like adding/removing extensions). You create and dispatch transactions through the view.
+
+```ts
+// Replace the entire document
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "New content",
+  },
+});
+```
+
+### Try It
+
+Here is a live CodeMirror editor with JavaScript syntax highlighting. Type some code and explore the editing experience:
+
+<HtmlPreview
+  title="Basic CodeMirror Editor"
+  height={300}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// Welcome to CodeMirror 6!\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nconsole.log(fibonacci(10));\\n',
+      extensions: [CM.basicSetup, CM.javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: '// Welcome to CodeMirror 6!\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nconsole.log(fibonacci(10));\\n',
+      extensions: [basicSetup, javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## Package Ecosystem
+
+CodeMirror 6 is split across many npm packages under the `@codemirror` and `@lezer` scopes. Here are the primary ones.
+
+### Core Packages
+
+- `@codemirror/state` - EditorState, transactions, state fields, facets
+- `@codemirror/view` - EditorView, decorations, DOM event handling, view plugins
+- `@codemirror/commands` - Standard editing commands and keymaps (defaultKeymap, history keymap)
+- `@codemirror/language` - Language support infrastructure (syntax tree, indentation, folding, highlighting)
+- `@codemirror/search` - Search and replace functionality
+- `@codemirror/autocomplete` - Autocompletion system
+- `@codemirror/lint` - Linting infrastructure
+
+### Language Packages
+
+Each supported language has its own package:
+
+- `@codemirror/lang-javascript` - JavaScript and TypeScript
+- `@codemirror/lang-html` - HTML
+- `@codemirror/lang-css` - CSS
+- `@codemirror/lang-json` - JSON
+- `@codemirror/lang-markdown` - Markdown
+- `@codemirror/lang-python` - Python
+- `@codemirror/lang-rust` - Rust
+- `@codemirror/lang-cpp` - C/C++
+- `@codemirror/lang-java` - Java
+- `@codemirror/lang-sql` - SQL
+- `@codemirror/lang-xml` - XML
+- `@codemirror/lang-php` - PHP
+
+Many more language packages exist. See the full list at [codemirror.net/docs/community](https://codemirror.net/docs/community/).
+
+### The `codemirror` Meta-Package
+
+The `codemirror` package is a convenience wrapper. It re-exports `basicSetup` (a bundle of commonly used extensions) along with `EditorView` and `EditorState`. It pulls in the core packages as dependencies, so installing `codemirror` alone gives you a working editor.
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+```
+
+`basicSetup` includes line numbers, bracket matching, history (undo/redo), fold gutter, search, autocompletion, and other standard features.
+
+There is also `minimalSetup` for lighter configurations where you want to pick and choose extensions yourself.
+
+### Lezer (Parser Framework)
+
+CodeMirror 6 uses [Lezer](https://lezer.codemirror.net/) as its parser framework. Lezer packages are under the `@lezer` scope:
+
+- `@lezer/common` - Shared parse tree types
+- `@lezer/lr` - LR parser runtime
+- `@lezer/highlight` - Syntax highlighting infrastructure
+- `@lezer/javascript`, `@lezer/html`, `@lezer/css`, etc. - Language-specific grammars
+
+You rarely interact with Lezer directly unless you are building a custom language extension.
+
+## When to Use CodeMirror
+
+CodeMirror is a good fit when you need:
+
+- A code/text editor embedded in a web application
+- Syntax highlighting for programming languages or structured text
+- Keybinding customization (including vim mode)
+- Fine-grained control over editor behavior through extensions
+- Good accessibility and mobile support
+
+### CodeMirror vs Other Editors
+
+- **Monaco Editor** - Monaco (the engine behind VS Code) is a full IDE-like editor. It is larger in bundle size and offers built-in features like IntelliSense, multi-cursor editing, and a minimap. CodeMirror is more lightweight and modular, giving you finer control over what gets included. Monaco is harder to customize at a low level; CodeMirror is designed around extensibility from the ground up.
+
+- **ProseMirror** - ProseMirror is a rich-text (WYSIWYG) editor toolkit for structured content. It is not designed for code editing. If you need rich text, use ProseMirror. If you need a code editor, use CodeMirror. The two share similar architectural principles (immutable state, transactions) because they are both authored by Marijn Haverbeke.
+
+- **Ace** - Ace is an older code editor with a simpler API. CodeMirror 6 offers a more modern architecture, better mobile support, and a more powerful extension system. Ace is easier to get started with if you need something basic quickly.
+
+## Documentation Structure
+
+This knowledge base is organized into the following sections:
+
+- **Getting Started** - Installation, setup, and quick reference (you are here)
+- **Core** - Deep dives into state management, the view layer, extensions, transactions, and the document model
+- **Vim Mode** - Configuring and customizing vim keybindings via `@replit/codemirror-vim`
+- **Extensions** - Guides for specific extensions (search, autocomplete, linting, themes, language support)
+- **Recipes** - Practical how-to guides for common tasks

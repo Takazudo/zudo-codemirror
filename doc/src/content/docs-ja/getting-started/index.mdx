@@ -1,0 +1,193 @@
+---
+title: 概要
+description: CodeMirror 6 の紹介 - アーキテクチャ、主要な概念、パッケージエコシステム。
+sidebar_position: 1
+---
+
+## CodeMirror 6 とは
+
+CodeMirror 6 は Web 向けのコードエディタコンポーネントです。CodeMirror 5 の完全な書き直しであり、以前のバージョンとコードを共有していません。モダンな Web 標準、アクセシビリティ、モバイル対応、拡張性をコアの目標として、ゼロから再設計されました。
+
+CodeMirror 5 との主な違い:
+
+- モジュラーアーキテクチャ - 単一のモノリシックなライブラリは存在しません。各関心事（状態管理、ビューのレンダリング、言語サポート、キーバインディング）がそれぞれ独自のパッケージに分かれています
+- イミュータブルな状態モデル - エディタの状態は永続データ構造として表現され、直接の変更ではなく Transaction を通じて更新されます
+- ファーストクラスの TypeScript サポート - コードベース全体が TypeScript で記述されており、完全な型定義が含まれています
+- アクセシビリティ - スクリーンリーダーのサポートと ARIA 属性が基盤レベルから組み込まれています
+- モバイル対応 - タッチ入力と仮想キーボードは後付けではなく、ネイティブに処理されます
+
+公式ドキュメントは [codemirror.net](https://codemirror.net/) にあります。
+
+## 主要な概念
+
+### EditorState
+
+`EditorState` は、ある時点でのエディタの現在の状態を表します。ドキュメントの内容、現在の選択範囲、すべてのアクティブな Extension とそれらに関連する状態を保持します。EditorState はイミュータブルです。直接変更することはありません。代わりに、Transaction を dispatch することで新しい状態を作成します。
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+const state = EditorState.create({
+  doc: "Hello, world!",
+  extensions: [
+    // extensions go here
+  ],
+});
+```
+
+### EditorView
+
+`EditorView` は UI コンポーネントです。`EditorState` を受け取り、DOM にレンダリングし、ユーザーインタラクション（タイピング、選択、スクロール）を処理します。View は状態を所有し、ユーザーがエディタを操作したとき、またはコードが Transaction を dispatch したときに状態を更新します。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+### Extension
+
+Extension は、エディタを設定・カスタマイズするための主要なメカニズムです。キーバインディング、シンタックスハイライト、行番号、括弧のマッチング、オートコンプリートなど、ほぼすべてが Extension として提供されます。Extension は、状態を作成する際に配列として渡します。
+
+```ts
+import { keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+import { lineNumbers } from "@codemirror/view";
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+  ],
+});
+```
+
+### Transaction
+
+`Transaction` は状態の変更を記述します。ドキュメントの変更、選択の更新、またはエフェクト（Extension の追加/削除など）を含めることができます。Transaction は View を通じて作成・dispatch します。
+
+```ts
+// Replace the entire document
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "New content",
+  },
+});
+```
+
+### 試してみる
+
+以下は JavaScript のシンタックスハイライトを備えたライブ CodeMirror エディタです。コードを入力して編集体験を試してみてください:
+
+<HtmlPreview
+  title="Basic CodeMirror Editor"
+  height={300}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// Welcome to CodeMirror 6!\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nconsole.log(fibonacci(10));\\n',
+      extensions: [CM.basicSetup, CM.javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: '// Welcome to CodeMirror 6!\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nconsole.log(fibonacci(10));\\n',
+      extensions: [basicSetup, javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## パッケージエコシステム
+
+CodeMirror 6 は `@codemirror` と `@lezer` スコープの多くの npm パッケージに分割されています。主要なパッケージは以下の通りです。
+
+### コアパッケージ
+
+- `@codemirror/state` - EditorState、Transaction、StateField、Facet
+- `@codemirror/view` - EditorView、Decoration、DOM イベント処理、ViewPlugin
+- `@codemirror/commands` - 標準的な編集コマンドとキーマップ（defaultKeymap、history キーマップ）
+- `@codemirror/language` - 言語サポート基盤（構文木、インデント、折りたたみ、ハイライト）
+- `@codemirror/search` - 検索と置換機能
+- `@codemirror/autocomplete` - オートコンプリートシステム
+- `@codemirror/lint` - Lint 基盤
+
+### 言語パッケージ
+
+サポートされている各言語には独自のパッケージがあります:
+
+- `@codemirror/lang-javascript` - JavaScript と TypeScript
+- `@codemirror/lang-html` - HTML
+- `@codemirror/lang-css` - CSS
+- `@codemirror/lang-json` - JSON
+- `@codemirror/lang-markdown` - Markdown
+- `@codemirror/lang-python` - Python
+- `@codemirror/lang-rust` - Rust
+- `@codemirror/lang-cpp` - C/C++
+- `@codemirror/lang-java` - Java
+- `@codemirror/lang-sql` - SQL
+- `@codemirror/lang-xml` - XML
+- `@codemirror/lang-php` - PHP
+
+他にも多くの言語パッケージが存在します。完全なリストは [codemirror.net/docs/community](https://codemirror.net/docs/community/) を参照してください。
+
+### `codemirror` メタパッケージ
+
+`codemirror` パッケージは便利なラッパーです。`basicSetup`（よく使われる Extension のバンドル）を `EditorView` や `EditorState` と共に再エクスポートします。コアパッケージを依存関係として取り込むため、`codemirror` だけをインストールすれば動作するエディタが得られます。
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+```
+
+`basicSetup` には、行番号、括弧のマッチング、履歴（undo/redo）、折りたたみガター、検索、オートコンプリート、その他の標準機能が含まれています。
+
+より軽量な設定で Extension を自分で選びたい場合は、`minimalSetup` もあります。
+
+### Lezer (パーサーフレームワーク)
+
+CodeMirror 6 はパーサーフレームワークとして [Lezer](https://lezer.codemirror.net/) を使用しています。Lezer パッケージは `@lezer` スコープの下にあります:
+
+- `@lezer/common` - 共有パースツリー型
+- `@lezer/lr` - LR パーサーランタイム
+- `@lezer/highlight` - シンタックスハイライト基盤
+- `@lezer/javascript`、`@lezer/html`、`@lezer/css` など - 言語固有の文法
+
+カスタム言語 Extension を構築する場合を除き、Lezer を直接操作することはほとんどありません。
+
+## CodeMirror の利用場面
+
+CodeMirror は以下が必要な場合に適しています:
+
+- Web アプリケーションに組み込むコード/テキストエディタ
+- プログラミング言語や構造化テキストのシンタックスハイライト
+- キーバインディングのカスタマイズ（vim モードを含む）
+- Extension による エディタ動作のきめ細かい制御
+- 優れたアクセシビリティとモバイル対応
+
+### CodeMirror と他のエディタの比較
+
+- **Monaco Editor** - Monaco（VS Code のエンジン）はフル IDE 的なエディタです。バンドルサイズが大きく、IntelliSense、マルチカーソル編集、ミニマップなどの組み込み機能を提供します。CodeMirror はより軽量でモジュラーであり、何を含めるかをより細かく制御できます。Monaco は低レベルでのカスタマイズが難しいのに対し、CodeMirror はゼロから拡張性を重視して設計されています。
+
+- **ProseMirror** - ProseMirror は構造化コンテンツ向けのリッチテキスト（WYSIWYG）エディタツールキットです。コード編集用には設計されていません。リッチテキストが必要なら ProseMirror を、コードエディタが必要なら CodeMirror を使ってください。両者は同じ作者（Marijn Haverbeke）によるもので、似たアーキテクチャ原則（イミュータブルな状態、Transaction）を共有しています。
+
+- **Ace** - Ace はよりシンプルな API を持つ古いコードエディタです。CodeMirror 6 はよりモダンなアーキテクチャ、より優れたモバイル対応、より強力な Extension システムを提供します。基本的なものをすぐに必要とする場合は、Ace の方が始めやすいでしょう。
+
+## ドキュメント構成
+
+このナレッジベースは以下のセクションで構成されています:
+
+- **Getting Started** - インストール、セットアップ、クイックリファレンス（現在のセクション）
+- **Core** - 状態管理、ビューレイヤー、Extension、Transaction、ドキュメントモデルの詳細
+- **Vim Mode** - `@replit/codemirror-vim` による vim キーバインディングの設定とカスタマイズ
+- **Extensions** - 個別の Extension に関するガイド（検索、オートコンプリート、Lint、テーマ、言語サポート）
+- **Recipes** - よくあるタスクの実践的な手順ガイド

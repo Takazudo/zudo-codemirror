@@ -1,0 +1,273 @@
+---
+title: Search & Replace
+description: "Using @codemirror/search for find and replace in CodeMirror 6: search panel, keybindings, highlighting matches, and regular expression search."
+sidebar_position: 4
+---
+
+## @codemirror/search
+
+The `@codemirror/search` package provides find-and-replace functionality for CodeMirror 6. It includes a search panel UI, keyboard shortcuts, match highlighting, and support for regular expressions.
+
+## Setting Up Search
+
+To enable search, add the `search()` extension and the `searchKeymap` keybindings:
+
+```ts
+import { search, searchKeymap } from "@codemirror/search";
+import { keymap } from "@codemirror/view";
+
+const extensions = [
+  search(),
+  keymap.of(searchKeymap),
+];
+```
+
+### searchKeymap
+
+The `searchKeymap` provides the following default bindings:
+
+- `Ctrl-F` (Windows/Linux) / `Cmd-F` (macOS) -- Open the search panel
+- `Ctrl-H` (Windows/Linux) / `Cmd-Option-F` (macOS) -- Open the search panel with replace
+- `F3` / `Ctrl-G` -- Find next match
+- `Shift-F3` / `Ctrl-Shift-G` -- Find previous match
+- `Alt-G` -- Go to line
+
+## highlightSelectionMatches()
+
+This extension, also from `@codemirror/search`, highlights all occurrences of the currently selected text throughout the document. It works independently of the search panel.
+
+```ts
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const extensions = [highlightSelectionMatches()];
+```
+
+You can configure the minimum selection length and the styling:
+
+```ts
+highlightSelectionMatches({
+  minSelectionLength: 2,
+  highlightWordAroundCursor: true,
+})
+```
+
+When `highlightWordAroundCursor` is true, placing the cursor inside a word (without selecting) will highlight all occurrences of that word.
+
+## Programmatic Search Commands
+
+The package exports several commands for controlling search from code:
+
+```ts
+import {
+  openSearchPanel,
+  closeSearchPanel,
+  findNext,
+  findPrevious,
+  replaceNext,
+  replaceAll,
+  selectMatches,
+} from "@codemirror/search";
+```
+
+### openSearchPanel and closeSearchPanel
+
+These commands open and close the search panel programmatically:
+
+```ts
+import { openSearchPanel, closeSearchPanel } from "@codemirror/search";
+
+// Open the search panel
+openSearchPanel(view);
+
+// Close the search panel
+closeSearchPanel(view);
+```
+
+### findNext and findPrevious
+
+Move the selection to the next or previous match:
+
+```ts
+import { findNext, findPrevious } from "@codemirror/search";
+
+findNext(view);
+findPrevious(view);
+```
+
+### replaceNext and replaceAll
+
+Replace the current match or all matches:
+
+```ts
+import { replaceNext, replaceAll } from "@codemirror/search";
+
+replaceNext(view);
+replaceAll(view);
+```
+
+### selectMatches
+
+Selects all matches simultaneously, creating multiple selections:
+
+```ts
+import { selectMatches } from "@codemirror/search";
+
+selectMatches(view);
+```
+
+## Search Configuration
+
+The `search()` function accepts a configuration object:
+
+```ts
+import { search } from "@codemirror/search";
+
+const extensions = [
+  search({
+    top: true,  // Show the search panel at the top of the editor (default: false)
+  }),
+];
+```
+
+### SearchQuery
+
+You can set the initial search state programmatically using `SearchQuery` and the `setSearchQuery` effect:
+
+```ts
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
+
+const query = new SearchQuery({
+  search: "hello",
+  caseSensitive: false,
+  regexp: false,
+  replace: "world",
+});
+
+view.dispatch({
+  effects: setSearchQuery.of(query),
+});
+```
+
+## Regular Expression Search
+
+The search panel includes a toggle button for regular expression mode. When enabled, the search string is interpreted as a regular expression.
+
+You can also configure regex search programmatically through `SearchQuery`:
+
+```ts
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
+
+const query = new SearchQuery({
+  search: "\\bfunction\\s+\\w+",
+  regexp: true,
+});
+
+view.dispatch({
+  effects: setSearchQuery.of(query),
+});
+```
+
+Regular expression search supports JavaScript regex syntax. Capture groups can be referenced in the replace string using `$1`, `$2`, etc.
+
+```ts
+const query = new SearchQuery({
+  search: "(\\w+)\\s*=\\s*(\\w+)",
+  regexp: true,
+  replace: "$2 = $1",  // Swap the two sides of the assignment
+});
+```
+
+## Styling the Search Panel
+
+The search panel renders with CSS classes that you can style in your theme:
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const searchTheme = EditorView.theme({
+  ".cm-panels": {
+    backgroundColor: "#f5f5f5",
+    borderBottom: "1px solid #ddd",
+  },
+  ".cm-searchMatch": {
+    backgroundColor: "#ffd54f80",
+  },
+  ".cm-searchMatch-selected": {
+    backgroundColor: "#ff980080",
+  },
+});
+```
+
+- `.cm-panels` -- the container for the search panel
+- `.cm-searchMatch` -- highlighted search matches in the document
+- `.cm-searchMatch-selected` -- the currently selected match
+
+## Complete Search Setup
+
+A full example with search, selection highlighting, and keybindings:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import {
+  search,
+  searchKeymap,
+  highlightSelectionMatches,
+} from "@codemirror/search";
+
+const state = EditorState.create({
+  doc: "Search for text in this editor.",
+  extensions: [
+    search({ top: true }),
+    highlightSelectionMatches(),
+    keymap.of(searchKeymap),
+  ],
+});
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+Try pressing Ctrl-F (or Cmd-F on macOS) to open the search panel in the editor below. The text contains repeated words you can search for:
+
+<HtmlPreview
+  title="Search & Replace Demo"
+  height={350}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// Search demo: try Ctrl-F or Cmd-F to find text\\nconst fruits = ["apple", "banana", "cherry"];\\nconst colors = ["red", "yellow", "red"];\\n\\nfunction findItem(list, item) {\\n  return list.filter(entry => entry === item);\\n}\\n\\n// Find all red items\\nconst redItems = findItem(colors, "red");\\nconsole.log("Found:", redItems);\\n\\n// Find all apple entries\\nconst apples = findItem(fruits, "apple");\\nconsole.log("Apples:", apples);\\n',
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+        CM.search({ top: true }),
+        CM.highlightSelectionMatches(),
+        CM.keymap.of(CM.searchKeymap),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup, keymap } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+    import {
+      search,
+      searchKeymap,
+      highlightSelectionMatches,
+    } from "@codemirror/search";
+
+    const view = new EditorView({
+      doc: '// Search demo: try Ctrl-F or Cmd-F to find text\\nconst fruits = ["apple", "banana", "cherry"];\\nconst colors = ["red", "yellow", "red"];\\n\\nfunction findItem(list, item) {\\n  return list.filter(entry => entry === item);\\n}\\n\\n// Find all red items\\nconst redItems = findItem(colors, "red");\\nconsole.log("Found:", redItems);\\n\\n// Find all apple entries\\nconst apples = findItem(fruits, "apple");\\nconsole.log("Apples:", apples);\\n',
+      extensions: [
+        basicSetup,
+        javascript(),
+        search({ top: true }),
+        highlightSelectionMatches(),
+        keymap.of(searchKeymap),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>

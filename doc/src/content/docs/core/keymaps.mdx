@@ -1,0 +1,298 @@
+---
+title: Key Bindings
+description: "Configuring key bindings in CodeMirror 6: the keymap facet, KeyBinding interface, built-in keymaps, and custom bindings."
+sidebar_position: 6
+---
+
+# Key Bindings
+
+Key bindings in CodeMirror 6 are handled through the `keymap` facet. Unlike CodeMirror 5, there is no global keymap registry -- you explicitly include the keymaps you need as extensions.
+
+## The keymap Facet
+
+`keymap` is a facet from `@codemirror/view` that accepts arrays of `KeyBinding` objects:
+
+```ts
+import { keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let view = new EditorView({
+  extensions: [keymap.of(defaultKeymap)],
+  parent: document.body,
+});
+```
+
+You can include multiple `keymap.of()` calls in your extensions. They are tried in order until one handles the key event.
+
+## KeyBinding Interface
+
+A `KeyBinding` object describes a single binding:
+
+```ts
+interface KeyBinding {
+  key?: string; // Key name (e.g., "Ctrl-s", "Enter")
+  mac?: string; // macOS-specific override
+  linux?: string; // Linux-specific override
+  win?: string; // Windows-specific override
+  run?: (view: EditorView) => boolean; // Handler function
+  shift?: (view: EditorView) => boolean; // Handler when Shift is also held
+  scope?: string; // Scope restriction (e.g., "editor")
+  preventDefault?: boolean; // Whether to prevent default browser behavior
+  stopPropagation?: boolean; // Whether to stop event propagation
+}
+```
+
+The `run` function returns `true` if it handled the key, or `false` to let subsequent bindings try:
+
+```ts
+let binding = {
+  key: "Ctrl-s",
+  run(view) {
+    saveDocument(view.state.doc.toString());
+    return true;
+  },
+};
+```
+
+## Key Names and Modifiers
+
+Key names follow a specific format: modifiers joined by `-`, followed by the key name.
+
+#### Modifiers
+
+- `Ctrl` -- Control key (on all platforms)
+- `Alt` -- Alt/Option key
+- `Shift` -- Shift key
+- `Meta` -- Command key on macOS, Windows key on Windows
+- `Mod` -- `Ctrl` on Windows/Linux, `Cmd` on macOS (convenience alias)
+
+#### Key Names
+
+- Letter keys: `a` through `z` (lowercase)
+- Number keys: `0` through `9`
+- Function keys: `F1` through `F12`
+- Special keys: `Enter`, `Escape`, `Backspace`, `Tab`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Space`
+
+#### Examples
+
+```ts
+let bindings = [
+  { key: "Ctrl-s", run: handleSave },
+  { key: "Ctrl-Shift-p", run: openCommandPalette },
+  { key: "Alt-ArrowUp", run: moveLineUp },
+  { key: "Mod-z", run: undo }, // Ctrl-z on Windows, Cmd-z on Mac
+  { key: "F2", run: renameSymbol },
+  { key: "Escape", run: closePanel },
+];
+```
+
+## Built-in Keymaps
+
+CodeMirror provides several pre-built keymap arrays.
+
+#### defaultKeymap
+
+From `@codemirror/commands`. Provides standard editing bindings:
+
+- `ArrowLeft`, `ArrowRight` -- character movement
+- `ArrowUp`, `ArrowDown` -- line movement
+- `Mod-ArrowLeft`, `Mod-ArrowRight` -- word movement (platform-aware)
+- `Home`, `End` -- line start/end
+- `Ctrl-Home`, `Ctrl-End` -- document start/end
+- `Enter` -- insert new line
+- `Backspace`, `Delete` -- character deletion
+- `Mod-Backspace`, `Mod-Delete` -- word deletion
+- `Mod-a` -- select all
+- `Ctrl-d` -- delete line (on some platforms)
+- `Shift` variants of movement keys -- extend selection
+
+```ts
+import { defaultKeymap } from "@codemirror/commands";
+```
+
+#### historyKeymap
+
+From `@codemirror/commands`. Requires `history()` to be in the extensions:
+
+- `Mod-z` -- undo
+- `Mod-y` or `Mod-Shift-z` -- redo
+
+```ts
+import { history, historyKeymap } from "@codemirror/commands";
+
+let extensions = [history(), keymap.of(historyKeymap)];
+```
+
+#### searchKeymap
+
+From `@codemirror/search`. Requires `search()` to be in the extensions:
+
+- `Mod-f` -- open search panel
+- `Mod-h` -- open search and replace panel (or `Mod-Shift-h` on macOS)
+- `F3` or `Mod-g` -- find next
+- `Shift-F3` or `Mod-Shift-g` -- find previous
+- `Alt-g` -- go to line
+
+```ts
+import { search, searchKeymap } from "@codemirror/search";
+
+let extensions = [search(), keymap.of(searchKeymap)];
+```
+
+#### completionKeymap
+
+From `@codemirror/autocomplete`. Provides autocompletion navigation:
+
+- `Ctrl-Space` -- trigger completion
+- `Escape` -- close completion popup
+- `ArrowDown`, `ArrowUp` -- navigate completion list
+- `Enter` -- accept completion
+
+#### closeBracketsKeymap
+
+From `@codemirror/autocomplete`. Provides `Backspace` handling that removes matching auto-closed brackets.
+
+## Multiple Keymaps and Precedence
+
+When multiple keymaps are included, they are checked in order. The first binding whose `run` function returns `true` wins.
+
+```ts
+let customKeymap = keymap.of([
+  { key: "Ctrl-s", run: handleSave },
+]);
+
+let extensions = [
+  customKeymap, // Checked first
+  keymap.of(defaultKeymap), // Checked if custom doesn't handle it
+];
+```
+
+To guarantee that a keymap takes priority regardless of position, use `Prec`:
+
+```ts
+import { Prec } from "@codemirror/state";
+
+let highPriorityKeymap = Prec.high(
+  keymap.of([
+    { key: "Ctrl-s", run: handleSave },
+  ])
+);
+```
+
+## Platform-Specific Bindings
+
+Use the `mac`, `win`, and `linux` fields to provide platform-specific key combinations:
+
+```ts
+let binding = {
+  key: "Ctrl-Shift-k", // Default for all platforms
+  mac: "Cmd-Shift-k", // macOS override
+  run: deleteLine,
+};
+```
+
+The `Mod` shorthand handles the most common case -- mapping to `Ctrl` on Windows/Linux and `Cmd` on macOS:
+
+```ts
+let binding = {
+  key: "Mod-s", // Ctrl-s on Windows/Linux, Cmd-s on macOS
+  run: handleSave,
+};
+```
+
+## The indentWithTab Binding
+
+By default, `Tab` does not insert a tab character in CodeMirror 6 (for accessibility -- Tab should move focus between UI elements). If you want `Tab` to indent, import `indentWithTab`:
+
+```ts
+import { indentWithTab } from "@codemirror/commands";
+
+let extensions = [keymap.of([indentWithTab])];
+```
+
+`indentWithTab` provides:
+
+- `Tab` -- indent the selected lines (or insert indentation at cursor)
+- `Shift-Tab` -- dedent the selected lines
+
+<Warning>
+
+Using `indentWithTab` changes the keyboard accessibility of your editor. Users who navigate with the keyboard rely on Tab to move focus. Consider whether your use case requires this tradeoff.
+
+</Warning>
+
+## Creating Custom Keymaps
+
+Build a keymap as an array of `KeyBinding` objects and wrap it with `keymap.of()`:
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+function duplicateLine(view) {
+  let { state } = view;
+  let line = state.doc.lineAt(state.selection.main.head);
+  let text = line.text;
+  view.dispatch({
+    changes: { from: line.to, insert: "\n" + text },
+  });
+  return true;
+}
+
+function toggleComment(view) {
+  // Toggle line comment implementation
+  let { state } = view;
+  let line = state.doc.lineAt(state.selection.main.head);
+  if (line.text.startsWith("// ")) {
+    view.dispatch({
+      changes: { from: line.from, to: line.from + 3 },
+    });
+  } else {
+    view.dispatch({
+      changes: { from: line.from, insert: "// " },
+    });
+  }
+  return true;
+}
+
+let myKeymap = keymap.of([
+  { key: "Ctrl-Shift-d", run: duplicateLine },
+  { key: "Ctrl-/", run: toggleComment },
+]);
+```
+
+## Full Example
+
+Bringing it all together:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
+import { search, searchKeymap } from "@codemirror/search";
+
+function handleSave(view) {
+  console.log("Saving:", view.state.doc.toString());
+  return true;
+}
+
+let view = new EditorView({
+  doc: "// Type here\n",
+  extensions: [
+    history(),
+    search(),
+    keymap.of([
+      { key: "Mod-s", run: handleSave, preventDefault: true },
+      indentWithTab,
+    ]),
+    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+In this setup, the custom `Mod-s` binding is checked first because it appears earlier in the extensions array. The `defaultKeymap`, `historyKeymap`, and `searchKeymap` are spread into a single array and checked as a group.

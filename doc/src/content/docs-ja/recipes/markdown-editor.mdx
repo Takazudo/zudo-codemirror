@@ -1,0 +1,289 @@
+---
+title: Markdown エディタ
+description: CodeMirror 6 で言語サポート、キーバインディング、リスト処理、フロントマターを備えた Markdown エディタを構築する。
+sidebar_position: 2
+---
+
+# Markdown エディタ
+
+このページでは、CodeMirror 6 を使って Markdown に特化したエディタを構築するためのパターンを解説します。Markdown 言語パッケージはシンタックスハイライトとパースを提供しますが、本番環境のエディタには通常、追加のキーバインディング、リスト処理、プラットフォーム固有の調整が必要です。
+
+## 言語のセットアップ
+
+`@codemirror/lang-markdown` パッケージは Markdown のパースとシンタックスハイライトを提供します。フェンスドコードブロックを各言語でハイライトするには、`codeLanguages` オプションに `@codemirror/language-data` を渡します。
+
+```ts
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const markdownExtension = markdown({
+  base: markdownLanguage,
+  codeLanguages: languages,
+});
+```
+
+`languages` 配列には数十の言語の遅延読み込み定義が含まれています。CodeMirror は、その言語タグを持つフェンスドコードブロックに遭遇したときにのみ、言語文法をダウンロードしてパースします。未使用の言語には事前のコストはかかりません。
+
+## Markdown 固有のキーバインディング
+
+Markdown 言語パッケージは `markdownKeymap` をエクスポートしています。太字、イタリック、コードのフォーマットをトグルするキーバインディングが含まれています。
+
+```ts
+import { markdownKeymap } from "@codemirror/lang-markdown";
+import { keymap } from "@codemirror/view";
+
+const markdownKeys = keymap.of(markdownKeymap);
+```
+
+## Enter キーでのリスト継続
+
+Markdown を編集中に、リストアイテム内で Enter を押すと、同じプレフィックスを持つ新しいリストアイテムを作成するべきです。`@codemirror/lang-markdown` の組み込みコマンド `insertNewlineContinueMarkup` がこれを処理します。`- `、`* `、`1. `、チェックボックス（`- [ ] `）プレフィックスに対応しています。
+
+```ts
+import { insertNewlineContinueMarkup } from "@codemirror/lang-markdown";
+import { keymap } from "@codemirror/view";
+
+const listContinuation = keymap.of([
+  { key: "Enter", run: insertNewlineContinueMarkup },
+]);
+```
+
+現在の行が空のリストアイテム（プレフィックスのみでコンテンツがない）の場合、Enter を押すとプレフィックスが削除され、リストから抜けます。
+
+## Tab / Shift-Tab によるリストのインデント
+
+Tab と Shift-Tab でリストアイテムのインデント/アウトデントができます。`@codemirror/commands` の `indentMore` と `indentLess` を使用します。
+
+```ts
+import { indentMore, indentLess } from "@codemirror/commands";
+import { keymap } from "@codemirror/view";
+
+const listIndentation = keymap.of([
+  { key: "Tab", run: indentMore },
+  { key: "Shift-Tab", run: indentLess },
+]);
+```
+
+<Note>
+
+これは Tab キーをキャプチャするため、キーボードナビゲーションのアクセシビリティに影響する可能性があります。アプリケーションで Tab がフォーカス移動に必要かどうかを検討してください。
+
+</Note>
+
+## フロントマターの処理
+
+静的サイトジェネレーターや CMS の Markdown ファイルは、`---` で区切られた YAML フロントマターで始まることが多いです。CodeMirror の Markdown パーサーはデフォルトではフロントマターを処理しません。パーサーを拡張してフロントマターブロックを認識させるか、プレーンテキストとして扱い Decoration でスタイリングすることができます。
+
+シンプルなアプローチとして、`@codemirror/lang-yaml` パッケージをカスタムコードブロックハンドラー内で使用できますが、フロントマターに特化した場合は、Markdown パーサーの `extensions` オプションでサポートを追加できます。
+
+```ts
+import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
+
+const markdownWithFrontmatter = markdown({
+  extensions: [
+    {
+      // Recognize YAML frontmatter at the start of the document
+      defineNodes: ["Frontmatter"],
+      parseBlock: [
+        {
+          name: "Frontmatter",
+          parse(cx, line) {
+            if (cx.lineStart === 0 && line.text === "---") {
+              const start = cx.lineStart;
+              while (cx.nextLine()) {
+                if (line.text === "---") {
+                  cx.nextLine();
+                  cx.addElement(
+                    cx.elt("Frontmatter", start, cx.lineStart)
+                  );
+                  return true;
+                }
+              }
+            }
+            return false;
+          },
+        },
+      ],
+    },
+  ],
+});
+```
+
+## プレビューペインの考慮事項
+
+サイドバイサイドのプレビューペインは Markdown エディタでよく求められる機能です。CodeMirror はプレビューコンポーネントを提供しないため、Markdown から HTML への変換ライブラリ（`marked`、`remark`、`markdown-it` など）を使って自分でレンダリングします。
+
+エディタとプレビューを同期するためのポイント:
+
+- `EditorView.updateListener` でドキュメントの変更を監視し、プレビュー HTML を再レンダリングする
+- Markdown から HTML への変換が重い場合はレンダリングをデバウンスする
+- スクロール同期には、エディタとレンダリング済み HTML 間で行番号をマッピングする。エディタの `view.lineBlockAtHeight()` メソッドと `view.coordsAtPos()` メソッドが役立つ
+- プレビューレンダラーは CodeMirror の Extension システムの外に置く。Extension である必要はなく、ドキュメントテキストを受け取る別のコンポーネントにできる
+
+## macOS の入力機能の抑制
+
+macOS はデフォルトで contenteditable 要素にオートコレクト、オートコンプリート、オートキャピタライズ、入力候補を適用します。これらの機能は Markdown やコードの編集を妨げます。`EditorView.contentAttributes` で無効化します。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const suppressMacFeatures = EditorView.contentAttributes.of({
+  autocorrect: "off",
+  autocomplete: "off",
+  autocapitalize: "off",
+  spellcheck: "false",
+  writingsuggestions: "false",
+});
+```
+
+`writingsuggestions` 属性は、Safari や WebKit ベースのビューで表示される Apple のインライン入力候補を無効にします。これがないと、エディタに候補バブルが表示され、編集フローが中断される可能性があります。
+
+<Tip>
+
+`suppressMacFeatures` は Extension 配列の先頭付近に追加してください。これらの属性は、CodeMirror がテキスト入力用に作成する contenteditable 要素に適用されます。
+
+</Tip>
+
+## すべてを組み合わせる
+
+Markdown エディタ用の統合された Extension セットアップです。
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentMore,
+  indentLess,
+} from "@codemirror/commands";
+import {
+  markdown,
+  markdownLanguage,
+  markdownKeymap,
+  insertNewlineContinueMarkup,
+} from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const extensions = [
+  history(),
+  markdown({ base: markdownLanguage, codeLanguages: languages }),
+  keymap.of([
+    ...defaultKeymap,
+    ...historyKeymap,
+    ...markdownKeymap,
+    { key: "Enter", run: insertNewlineContinueMarkup },
+    { key: "Tab", run: indentMore },
+    { key: "Shift-Tab", run: indentLess },
+  ]),
+  EditorView.contentAttributes.of({
+    autocorrect: "off",
+    autocomplete: "off",
+    autocapitalize: "off",
+    spellcheck: "false",
+    writingsuggestions: "false",
+  }),
+  EditorView.lineWrapping,
+];
+
+const state = EditorState.create({ doc: "", extensions });
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor")!,
+});
+```
+
+以下のライブエディタで Markdown を編集してみてください。見出し、太字テキスト、リンク、リスト、フェンスドコードブロックのシンタックスハイライトに注目してください:
+
+<HtmlPreview
+  title="Markdown Editor"
+  height={350}
+  html={`<div id="editor"></div>`}
+  js={`
+    const doc = [
+      "# Markdown Editor Demo",
+      "",
+      "This is a **live markdown editor** powered by CodeMirror 6.",
+      "",
+      "## Features",
+      "",
+      "- Syntax highlighting for markdown",
+      "- Support for [links](https://codemirror.net)",
+      "- Fenced code blocks with language tags",
+      "- Line wrapping enabled",
+      "",
+      "## Code Example",
+      "",
+      "\\\`\\\`\\\`js",
+      "function greet(name) {",
+      "  return \\\`Hello, $\{name}!\\\`;",
+      "}",
+      "console.log(greet(\\"world\\"));",
+      "\\\`\\\`\\\`",
+      "",
+      "## A Numbered List",
+      "",
+      "1. First item",
+      "2. Second item",
+      "3. Third item",
+      "",
+      "> Blockquotes are also highlighted correctly.",
+      "",
+    ].join("\\n");
+
+    const view = new CM.EditorView({
+      doc,
+      extensions: [
+        CM.basicSetup,
+        CM.markdown({ base: CM.markdownLanguage }),
+        CM.EditorView.lineWrapping,
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+
+    const doc = \`# Markdown Editor Demo
+
+This is a **live markdown editor** powered by CodeMirror 6.
+
+## Features
+
+- Syntax highlighting for markdown
+- Support for [links](https://codemirror.net)
+- Fenced code blocks with language tags
+- Line wrapping enabled
+
+## Code Example
+
+\\\`\\\`\\\`js
+function greet(name) {
+  return \\\`Hello, \${name}!\\\`;
+}
+console.log(greet("world"));
+\\\`\\\`\\\`
+
+## A Numbered List
+
+1. First item
+2. Second item
+3. Third item
+
+> Blockquotes are also highlighted correctly.
+\`;
+
+    const view = new EditorView({
+      doc,
+      extensions: [
+        basicSetup,
+        markdown({ base: markdownLanguage }),
+        EditorView.lineWrapping,
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>

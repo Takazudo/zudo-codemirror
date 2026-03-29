@@ -1,0 +1,180 @@
+---
+title: Custom Key Mappings
+description: Define custom vim key mappings, leader keys, and mode-specific bindings in @replit/codemirror-vim.
+sidebar_position: 4
+---
+
+# Custom Key Mappings
+
+`@replit/codemirror-vim` provides a programmatic API for defining vim-style key mappings. These work the same way as `:map` and `:noremap` Ex commands but are called from JavaScript/TypeScript.
+
+## Core Mapping API
+
+All mapping functions are methods on the `Vim` object.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+### Vim.map()
+
+Creates a recursive key mapping. If `{rhs}` is itself a mapped sequence, the mapping is expanded.
+
+```ts
+Vim.map(lhs: string, rhs: string, mode?: string): void
+```
+
+### Vim.noremap()
+
+Creates a non-recursive key mapping. The `{rhs}` is interpreted as raw keys, not expanded through other mappings.
+
+```ts
+Vim.noremap(lhs: string, rhs: string, mode?: string): void
+```
+
+### Vim.unmap()
+
+Removes a previously defined mapping.
+
+```ts
+Vim.unmap(lhs: string, mode?: string): void
+```
+
+## Mode Parameter
+
+The optional `mode` parameter restricts the mapping to a specific vim mode.
+
+| Value | Mode |
+|-------|------|
+| `"normal"` | normal mode |
+| `"insert"` | insert mode |
+| `"visual"` | visual mode |
+| (omitted) | all modes |
+
+## Key Notation
+
+Key sequences use vim-style notation for special keys.
+
+| Notation | Key |
+|----------|-----|
+| `<Esc>` | Escape |
+| `<CR>` | Enter / Return |
+| `<Tab>` | Tab |
+| `<Space>` | Space |
+| `<BS>` | Backspace |
+| `<C-w>` | Ctrl+w |
+| `<C-d>` | Ctrl+d |
+| `<A-x>` | Alt+x |
+| `<S-Tab>` | Shift+Tab |
+| `<Leader>` | Leader key (configurable, default is `\`) |
+
+## Practical Examples
+
+### Escape from Insert Mode with jk
+
+A common mapping to avoid reaching for the Escape key.
+
+```ts
+Vim.map("jk", "<Esc>", "insert");
+```
+
+### Map Leader Key Combinations
+
+Set a leader key and define leader-based shortcuts.
+
+```ts
+// Set leader to space
+Vim.map("<Space>", "<Leader>");
+
+// Leader+w to write
+Vim.map("<Leader>w", ":w<CR>");
+
+// Leader+q to quit
+Vim.map("<Leader>q", ":q<CR>");
+```
+
+### Window-like Shortcuts in Insert Mode
+
+```ts
+// Ctrl+s to save from insert mode
+Vim.noremap("<C-s>", "<Esc>:w<CR>a", "insert");
+```
+
+### Remap Navigation Keys
+
+```ts
+// Make H and L go to start/end of line
+Vim.noremap("H", "^", "normal");
+Vim.noremap("L", "$", "normal");
+```
+
+### Mapping to Ex Commands
+
+Mappings that include `:` enter command-line mode and can execute Ex commands.
+
+```ts
+// Clear search highlighting with leader+h
+Vim.map("<Leader>h", ":nohlsearch<CR>");
+
+// Sort selection with leader+s
+Vim.map("<Leader>s", ":sort<CR>", "visual");
+```
+
+### Move Lines Up and Down
+
+```ts
+Vim.noremap("<A-j>", ":m .+1<CR>", "normal");
+Vim.noremap("<A-k>", ":m .-2<CR>", "normal");
+```
+
+## Setting the Leader Key
+
+The leader key is a configurable prefix used in custom mappings. The default leader is `\` (backslash).
+
+To change the leader key:
+
+```ts
+Vim.map("<Space>", "<Leader>");
+```
+
+After this, any mapping that uses `<Leader>` will respond to Space followed by the next key.
+
+<Warning>
+
+Setting the leader key with `Vim.map` must happen before defining mappings that use `<Leader>`. Otherwise, those earlier mappings will still use the old leader key.
+
+</Warning>
+
+## Removing Mappings
+
+Remove mappings when they are no longer needed.
+
+```ts
+// Remove the jk mapping in insert mode
+Vim.unmap("jk", "insert");
+
+// Remove a normal mode mapping
+Vim.unmap("H", "normal");
+```
+
+## Recursive vs Non-Recursive Mappings
+
+Use `Vim.noremap()` in most cases.
+
+- `Vim.map()` -- the right-hand side is expanded through other existing mappings, which can cause infinite loops if not careful
+- `Vim.noremap()` -- the right-hand side is literal keystrokes, preventing unintended chaining
+
+```ts
+// Safe: noremap prevents recursive expansion
+Vim.noremap("j", "gj", "normal");
+Vim.noremap("k", "gk", "normal");
+
+// Dangerous with map: if gj were also mapped, this could loop
+// Vim.map("j", "gj", "normal"); // avoid this pattern
+```
+
+<Tip>
+
+Following the same best practice as in a `.vimrc`, prefer `noremap` / `nnoremap` / `inoremap` / `vnoremap` over `map` / `nmap` / `imap` / `vmap` unless you specifically need recursive expansion.
+
+</Tip>

@@ -1,0 +1,215 @@
+---
+title: Performance Tips
+description: "Optimizing CodeMirror 6 editor performance: avoiding recreation, using compartments, debouncing, lazy loading, and measuring performance."
+sidebar_position: 5
+---
+
+# Performance Tips
+
+CodeMirror 6 is designed to handle large documents efficiently. Its virtual scrolling, incremental parsing, and transaction-based architecture keep most operations fast out of the box. The performance problems that do arise usually come from application-level patterns -- recreating the editor unnecessarily, running expensive work on every keystroke, or loading unused language grammars upfront.
+
+## Avoid Recreating the Editor
+
+The most common performance mistake is destroying and recreating the `EditorView` when something changes. Editor creation involves building the DOM tree, computing styles, initializing extensions, parsing the document, and rendering the visible viewport. All of this work is wasted if you recreate the editor just to update the content or toggle an extension.
+
+Situations that tempt recreation but should use dispatch or compartments instead:
+
+- Changing the document content -- use `view.dispatch({ changes: ... })`
+- Switching the language mode -- use a compartment
+- Toggling an extension (line numbers, line wrapping, read-only) -- use a compartment
+- Changing the theme -- use a compartment
+- Updating configuration (tab size, indent unit) -- use a compartment
+
+## Use Compartments for Dynamic Changes
+
+A `Compartment` lets you swap an extension at runtime without recreating the editor. Create the compartment once, include it in the initial extensions, and reconfigure it later.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { javascript } from "@codemirror/lang-javascript";
+import { python } from "@codemirror/lang-python";
+
+const languageCompartment = new Compartment();
+
+// Initial setup with JavaScript
+const extensions = [
+  languageCompartment.of(javascript()),
+  // other extensions...
+];
+
+// Later, switch to Python
+function switchToPython(view: EditorView) {
+  view.dispatch({
+    effects: languageCompartment.reconfigure(python()),
+  });
+}
+```
+
+Compartment reconfiguration is a single transaction. It does not destroy and rebuild the editor -- it only recalculates the affected parts of the extension pipeline.
+
+## Debounce Change Handlers
+
+If you run expensive operations on every document change (saving to disk, running a linter, re-rendering a preview, sending content to a server), debounce them. Document changes fire on every keystroke, including each character typed, each backspace, and each paste.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+function debounce<T extends (...args: any[]) => void>(
+  fn: T,
+  delay: number
+): T {
+  let timer: ReturnType<typeof setTimeout>;
+  return ((...args: any[]) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  }) as T;
+}
+
+const debouncedSave = debounce((content: string) => {
+  saveToServer(content);
+}, 500);
+
+const changeListener = EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    debouncedSave(update.state.doc.toString());
+  }
+});
+```
+
+Choose the delay based on the operation cost. 300-500ms is typical for saves and preview rendering. For linting, 500-1000ms avoids re-linting while the user is actively typing.
+
+## Virtual Scrolling
+
+CodeMirror 6 only renders the lines visible in the viewport, plus a small buffer above and below. This is built in and requires no configuration. A document with 100,000 lines renders just as fast as one with 100 lines, because only the visible portion exists in the DOM.
+
+This means you do not need to worry about document size for rendering performance. The bottleneck for very large documents is parsing (syntax highlighting the entire file) and `doc.toString()` calls (which concatenate the entire tree into a single string). For large documents, avoid calling `doc.toString()` on every change -- use `doc.sliceString()` to read specific ranges when possible.
+
+## Lazy Loading Language Modes
+
+The `@codemirror/language-data` package contains definitions for many languages, but it loads them lazily. When you pass `languages` as the `codeLanguages` option for markdown, the actual grammar for each language is only fetched when a fenced code block with that language tag is encountered.
+
+```ts
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const markdownExtension = markdown({
+  base: markdownLanguage,
+  codeLanguages: languages,
+});
+```
+
+If you are not using markdown's fenced code blocks and are building a single-language editor, import only the language you need. Do not import `@codemirror/language-data` unless you need multi-language support, since the package pulls in description metadata for all supported languages.
+
+## Extension Ordering
+
+Extensions are processed in array order, and earlier extensions take priority for keybindings and command dispatch. While this primarily affects functionality (which keybinding wins), it also has a minor performance implication: put the most frequently triggered extensions earlier in the array so they are checked first.
+
+For example, place `vim()` before `basicSetup` so that vim key handling is checked before the default keymap, avoiding unnecessary keymap lookups in normal mode.
+
+```ts
+const extensions = [
+  vim(),    // high-priority key handling
+  history(),
+  // other extensions
+  keymap.of(defaultKeymap), // lower-priority fallback
+];
+```
+
+## Measuring Editor Performance
+
+Use the browser's Performance API to measure specific operations:
+
+```ts
+// Measure dispatch time
+const start = performance.now();
+view.dispatch({
+  changes: { from: 0, to: view.state.doc.length, insert: largeContent },
+});
+const elapsed = performance.now() - start;
+console.log(`Dispatch took ${elapsed.toFixed(2)}ms`);
+```
+
+For more detailed profiling, use Chrome DevTools' Performance panel. Look for:
+
+- Long "Update DOM" phases in the rendering timeline, which indicate the editor is rendering too many DOM nodes
+- Frequent full-document re-parses, which may indicate a language grammar issue
+- Layout thrashing from reading DOM measurements (like `getBoundingClientRect`) inside a tight loop
+
+## requestAnimationFrame for Scroll Operations
+
+When programmatically scrolling the editor (for example, implementing "scroll to line" or syncing scroll position with a preview pane), use `requestAnimationFrame` to batch the work with the browser's rendering cycle.
+
+```ts
+function scrollToLine(view: EditorView, lineNumber: number) {
+  const line = view.state.doc.line(lineNumber);
+  requestAnimationFrame(() => {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(line.from, { y: "start" }),
+    });
+  });
+}
+```
+
+Without `requestAnimationFrame`, scroll dispatches can race with the browser's layout and cause jank.
+
+## cancelAnimationFrame Cleanup in ViewPlugin
+
+If you use `requestAnimationFrame` inside a `ViewPlugin` (for example, to schedule deferred rendering or measurements), store the frame ID and cancel it in the plugin's `destroy()` method. Otherwise, the callback fires after the plugin is gone and may reference stale state.
+
+```ts
+import { ViewPlugin, ViewUpdate, EditorView } from "@codemirror/view";
+
+const myPlugin = ViewPlugin.fromClass(
+  class {
+    private frameId: number | null = null;
+
+    constructor(view: EditorView) {
+      this.scheduleUpdate(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.scheduleUpdate(update.view);
+      }
+    }
+
+    private scheduleUpdate(view: EditorView) {
+      if (this.frameId !== null) {
+        cancelAnimationFrame(this.frameId);
+      }
+      this.frameId = requestAnimationFrame(() => {
+        this.frameId = null;
+        // Perform deferred work here
+        this.doExpensiveUpdate(view);
+      });
+    }
+
+    private doExpensiveUpdate(view: EditorView) {
+      // Measure DOM, update decorations, etc.
+    }
+
+    destroy() {
+      if (this.frameId !== null) {
+        cancelAnimationFrame(this.frameId);
+        this.frameId = null;
+      }
+    }
+  }
+);
+```
+
+<Warning>
+
+Forgetting to cancel animation frames in `destroy()` is a common source of errors-after-unmount in editors embedded in single-page applications where the editor component can be removed and re-added as the user navigates.
+
+</Warning>
+
+## Summary of Patterns
+
+- Use `view.dispatch()` and compartments instead of recreating the editor
+- Debounce expensive handlers (saves, previews, lints) with 300-1000ms delays
+- Avoid `doc.toString()` on large documents when you only need a slice
+- Import only the language packages you need
+- Cancel animation frames and timeouts in `ViewPlugin.destroy()`
+- Profile with Chrome DevTools when investigating actual slowdowns rather than guessing

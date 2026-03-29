@@ -1,0 +1,153 @@
+---
+title: Vim オプション
+description: "@replit/codemirror-vim で :set wrap や :set number などの Vim オプションを定義・管理する方法。"
+sidebar_position: 7
+---
+
+# Vim オプション
+
+`@replit/codemirror-vim` は `Vim.defineOption()` を通じて Vim スタイルの `:set` コマンドをサポートしています。一部のオプションはそのまま動作しますが、Vim の設定と CodeMirror の設定を橋渡しするためにカスタム定義が必要なものもあります。
+
+## Vim.defineOption()
+
+`:set {name}` と `:set no{name}` に応答するカスタム Vim オプションを登録します。
+
+```ts
+Vim.defineOption(
+  name: string,
+  defaultValue: any,
+  type: string,
+  aliases?: string[],
+  callback?: (value: any, cm?: any) => void
+): void
+```
+
+- `name` -- `:set` コマンドで使用するオプション名
+- `defaultValue` -- 初期値
+- `type` -- 値の型（`"boolean"`、`"number"`、`"string"`）
+- `aliases` -- オプションの別名（例: `"number"` に対する `["nu"]`）
+- `callback` -- オプション値が変更されたときに呼ばれます。ここで CodeMirror エディターに変更を適用します。
+
+## 組み込みオプション
+
+これらのオプションは追加の設定なしで `@replit/codemirror-vim` で認識されます。
+
+| オプション | 型 | 説明 |
+|--------|------|-------------|
+| `number` | boolean | 行番号を表示 |
+| `relativenumber` | boolean | 相対行番号を表示 |
+
+```vim
+:set number
+:set nonumber
+:set relativenumber
+:set norelativenumber
+```
+
+## :set wrap / :set nowrap の実装
+
+行の折り返しは、CodeMirror の Extension（`EditorView.lineWrapping`）を `Compartment` で切り替える必要があるため、カスタムオプションの定義が必要です。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorView } from "@codemirror/view";
+import { Compartment } from "@codemirror/state";
+
+const wrapCompartment = new Compartment();
+```
+
+ビュー作成時に Compartment を extensions 配列に含めます。
+
+```ts
+const view = new EditorView({
+  extensions: [
+    vim(),
+    wrapCompartment.of(EditorView.lineWrapping),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor")!,
+});
+```
+
+次に、`:set wrap` と `:set nowrap` が Compartment を再設定するようにオプションを登録します。
+
+```ts
+Vim.defineOption("wrap", true, "boolean", [], (value: boolean) => {
+  view.dispatch({
+    effects: wrapCompartment.reconfigure(
+      value ? EditorView.lineWrapping : []
+    ),
+  });
+});
+```
+
+これにより、`:set nowrap` で行の折り返しが無効になり、`:set wrap` で再び有効になります。
+
+## :set tabstop の実装
+
+`tabstop` オプションを CodeMirror の `EditorState.tabSize` にマッピングします。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorState } from "@codemirror/state";
+import { Compartment } from "@codemirror/state";
+
+const tabSizeCompartment = new Compartment();
+
+// In extensions array:
+// tabSizeCompartment.of(EditorState.tabSize.of(4))
+
+Vim.defineOption("tabstop", 4, "number", ["ts"], (value: number) => {
+  const size = Math.max(1, Math.min(value, 16));
+  view.dispatch({
+    effects: tabSizeCompartment.reconfigure(
+      EditorState.tabSize.of(size)
+    ),
+  });
+});
+```
+
+これにより、Vim コマンドラインから `:set tabstop=2` や `:set ts=8` を実行できます。
+
+## カスタム Boolean オプションの実装
+
+Boolean トグルオプションのパターンはすべて同じ構造です。Extension を保持する Compartment と、それを再設定する `Vim.defineOption()` のコールバックです。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+// Example: a custom "cursorline" option using a highlight extension
+const cursorLineCompartment = new Compartment();
+
+// In extensions array:
+// cursorLineCompartment.of(highlightActiveLine())
+
+Vim.defineOption("cursorline", true, "boolean", ["cul"], (value: boolean) => {
+  view.dispatch({
+    effects: cursorLineCompartment.reconfigure(
+      value ? highlightActiveLine() : []
+    ),
+  });
+});
+```
+
+## オプション値の照会
+
+`:set {name}?` で Boolean オプションの現在の値を表示できます。Boolean オプションの場合、`:set {name}` でオンに、`:set no{name}` でオフになります。
+
+```vim
+:set number?       " shows whether line numbers are enabled
+:set tabstop?      " shows the current tab size
+```
+
+## Compartment パターンのまとめ
+
+Vim オプションと CodeMirror を橋渡しする一般的なパターンは以下のとおりです。
+
+- トグルまたは設定したい Extension 用に `Compartment` を作成する
+- 初期の extensions 配列に `compartment.of(defaultExtension)` を含める
+- `Vim.defineOption()` で `compartment.reconfigure()` エフェクトをディスパッチするコールバックを設定する
+
+このアプローチにより、Vim オプションの処理がクリーンに保たれ、副作用なく CodeMirror の Extension システムと統合できます。

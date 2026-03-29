@@ -1,0 +1,322 @@
+---
+title: カスタム Extension
+description: "CodeMirror 6 のカスタム Extension の構築: DOM 副作用のための ViewPlugin、カスタム状態のための StateField、状態更新のための StateEffect、Decoration。"
+sidebar_position: 5
+---
+
+## Extension の構成要素
+
+CodeMirror 6 は、カスタム Extension を構築するためのいくつかのプリミティブを提供しています。
+
+- **ViewPlugin** -- ビューの更新に応じてコードを実行し、DOM にアクセスできる
+- **StateField** -- 各トランザクションごとに更新されるカスタム状態を保持する
+- **StateEffect** -- 通常のドキュメントフローの外から状態変更をトリガーするためのシグナル
+- **Decoration** -- エディタへの視覚的な変更（マーク、ウィジェット、行デコレーション、置換）
+
+## ViewPlugin
+
+`ViewPlugin` はビューにアタッチされ、エディタが更新されるたびに副作用を実行できます。DOM の操作、スクロール動作、外部同期など、`EditorView` へのアクセスが必要な場合に適したツールです。
+
+```ts
+import { ViewPlugin, ViewUpdate, EditorView } from "@codemirror/view";
+
+const myPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view: EditorView) {
+      // Initialization: called once when the editor mounts
+    }
+    update(update: ViewUpdate) {
+      // Called after every state update
+      if (update.docChanged) {
+        // React to document changes
+      }
+    }
+    destroy() {
+      // Cleanup: called when the editor unmounts
+    }
+  },
+);
+```
+
+クラスはコンストラクタで `EditorView` を、`update` メソッドで `ViewUpdate` を受け取ります。`destroy` メソッドはプラグインが削除されるときに呼ばれます。
+
+### ViewPlugin と Decoration
+
+`ViewPlugin` は `decorations` アクセサを指定することで Decoration を提供できます。
+
+```ts
+import { ViewPlugin, Decoration, DecorationSet, EditorView } from "@codemirror/view";
+
+const highlightPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.buildDecorations(view);
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+    buildDecorations(view: EditorView) {
+      // Build and return a DecorationSet
+      return Decoration.none;
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+## StateField
+
+`StateField` はトランザクションをまたいで永続化される状態を保持します。エディタの初期化時に呼ばれる `create` 関数と、各トランザクションで呼ばれる `update` 関数を定義します。
+
+```ts
+import { StateField, Transaction } from "@codemirror/state";
+
+const charCount = StateField.define<number>({
+  create(state) {
+    return state.doc.length;
+  },
+  update(value: number, tr: Transaction) {
+    if (tr.docChanged) {
+      return tr.state.doc.length;
+    }
+    return value;
+  },
+});
+```
+
+フィールドの値を読み取るには以下のようにします。
+
+```ts
+const count = view.state.field(charCount);
+```
+
+### StateField と Decoration
+
+`StateField` も Decoration を提供できます。
+
+```ts
+import { StateField } from "@codemirror/state";
+import { EditorView, Decoration, DecorationSet } from "@codemirror/view";
+
+const highlightField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    // Add or remove decorations based on effects
+    return decorations;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+```
+
+## StateEffect
+
+`StateEffect` はトランザクションにアタッチできる型付きシグナルです。StateField は `update` 関数内でエフェクトを監視し、ドキュメント変更以外のイベントに応答します。
+
+```ts
+import { StateEffect, StateField } from "@codemirror/state";
+
+// Define an effect type
+const addHighlight = StateEffect.define<{ from: number; to: number }>();
+const removeHighlights = StateEffect.define<void>();
+
+// Listen for effects in a state field
+const highlights = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(addHighlight)) {
+        const { from, to } = effect.value;
+        value = value.update({
+          add: [highlightMark.range(from, to)],
+        });
+      }
+      if (effect.is(removeHighlights)) {
+        value = Decoration.none;
+      }
+    }
+    return value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// Dispatch an effect
+view.dispatch({
+  effects: addHighlight.of({ from: 0, to: 10 }),
+});
+```
+
+## Decoration
+
+Decoration はドキュメント自体を変更せずに、エディタのコンテンツの表示方法を変更します。4 種類あります。
+
+### Mark Decoration
+
+テキスト範囲に CSS クラスやインラインスタイルを適用します。
+
+```ts
+import { Decoration } from "@codemirror/view";
+
+const highlight = Decoration.mark({
+  class: "cm-highlight",
+});
+
+// Create a range: highlight.range(from, to)
+```
+
+### Widget Decoration
+
+エディタ内の特定の位置に DOM 要素を挿入します。
+
+```ts
+import { Decoration, WidgetType, EditorView } from "@codemirror/view";
+
+class CheckboxWidget extends WidgetType {
+  toDOM(view: EditorView) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.setAttribute("aria-label", "Toggle");
+    return checkbox;
+  }
+}
+
+const widget = Decoration.widget({
+  widget: new CheckboxWidget(),
+  side: 1,  // 1 = after the position, -1 = before
+});
+```
+
+### Line Decoration
+
+行要素全体に CSS クラスや属性を適用します。
+
+```ts
+const lineHighlight = Decoration.line({
+  class: "cm-highlighted-line",
+});
+```
+
+### Replace Decoration
+
+コンテンツの範囲をウィジェットで置き換えるか、完全に非表示にします。
+
+```ts
+const fold = Decoration.replace({
+  widget: new PlaceholderWidget(),
+});
+```
+
+## 例: タイプライタースクロール
+
+この `ViewPlugin` は、エディタのビューポート内でカーソルを垂直方向の中央に保ちます。カーソルが中央周辺の許容範囲を超えて移動すると、エディタがスクロールして再度中央に配置します。
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+function typewriterScrolling() {
+  return ViewPlugin.fromClass(
+    class {
+      private pendingFrame = 0;
+      update(update: ViewUpdate) {
+        if (!update.selectionSet && !update.docChanged) return;
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+        const view = update.view;
+        const { head } = view.state.selection.main;
+        this.pendingFrame = requestAnimationFrame(() => {
+          this.pendingFrame = 0;
+          const coords = view.coordsAtPos(head);
+          if (!coords) return;
+          const editorRect = view.dom.getBoundingClientRect();
+          const viewportHeight = editorRect.height;
+          const centerY = editorRect.top + viewportHeight / 2;
+          const cursorY = coords.top;
+          const tolerance = viewportHeight / 6;
+          if (Math.abs(cursorY - centerY) < tolerance) return;
+          view.scrollDOM.scrollTo({
+            top: view.scrollDOM.scrollTop + (cursorY - centerY),
+            behavior: "instant",
+          });
+        });
+      }
+      destroy() {
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+      }
+    },
+  );
+}
+```
+
+ポイント:
+
+- `requestAnimationFrame` を使ってスクロール更新をバッチ化し、レイアウトスラッシングを回避している
+- `selectionSet` と `docChanged` の両方を確認し、カーソル移動と入力の両方に対応している
+- 許容範囲（ビューポートの高さの 6 分の 1）を適用し、小さな動きでの不安定なスクロールを回避している
+- `destroy()` でペンディング中のアニメーションフレームをクリーンアップしている
+
+## 例: Markdown リストの自動継続
+
+この Extension は、Markdown のリストアイテムを自動的に継続する `Enter` キーハンドラーを追加します。リスト行の末尾で Enter を押すと、次のリストマーカーを挿入します。現在のリストアイテムが空の場合は、マーカーを削除します。
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+const listMarkerRe = /^(\s*)([-*+]|\d+\.)\s(\[[ xX]\]\s)?/;
+
+function getNextListMarker(lineText: string) {
+  const match = lineText.match(listMarkerRe);
+  if (!match) return null;
+  const [fullMatch, indent, marker, checkbox] = match;
+  const textAfterMarker = lineText.slice(fullMatch.length);
+  const isEmpty = textAfterMarker.trim() === "";
+  let nextMarker = marker;
+  if (/^\d+\./.test(marker)) {
+    nextMarker = `${parseInt(marker, 10) + 1}.`;
+  }
+  const nextCheckbox = checkbox ? "[ ] " : "";
+  return { prefix: `${indent}${nextMarker} ${nextCheckbox}`, isEmpty };
+}
+
+function markdownListIndent() {
+  return keymap.of([{
+    key: "Enter",
+    run(view) {
+      const { state } = view;
+      const { from, to } = state.selection.main;
+      if (from !== to) return false;
+      const line = state.doc.lineAt(from);
+      if (from !== line.to) return false;
+      const result = getNextListMarker(line.text);
+      if (!result) return false;
+      if (result.isEmpty) {
+        view.dispatch({ changes: { from: line.from, to: line.to, insert: "" } });
+        return true;
+      }
+      const newLine = `\n${result.prefix}`;
+      view.dispatch({
+        changes: { from, to: from, insert: newLine },
+        selection: { anchor: from + newLine.length },
+        scrollIntoView: true,
+      });
+      return true;
+    },
+  }]);
+}
+```
+
+ポイント:
+
+- ハンドラーが適用されない場合は `false` を返し、他のキーバインディングがイベントを処理できるようにしている
+- 選択範囲がなく、カーソルが行末にある場合のみ有効化される
+- 番号付きリストのマーカーを自動的にインクリメントする（`1.` が `2.` になる）
+- タスクリストのチェックボックス構文（`- [ ]`）を保持する
+- 現在のアイテムにコンテンツがない場合（空の `- ` 行で Enter を押した場合）、リストマーカーを削除する

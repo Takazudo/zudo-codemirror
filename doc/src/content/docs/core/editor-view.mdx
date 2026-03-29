@@ -1,0 +1,362 @@
+---
+title: EditorView
+description: "Working with CodeMirror 6's EditorView: DOM rendering, dispatching transactions, themes, plugins, and view lifecycle."
+sidebar_position: 3
+---
+
+# EditorView
+
+`EditorView` is the imperative shell that connects `EditorState` to the DOM. It renders the editor, handles user input, and coordinates state updates. While `EditorState` is purely functional, `EditorView` manages side effects: DOM manipulation, scrolling, focus, and event handling.
+
+Import it from `@codemirror/view`:
+
+```ts
+import { EditorView } from "@codemirror/view";
+```
+
+## Creating an EditorView
+
+Pass a `parent` element and optionally a pre-built `EditorState`:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let state = EditorState.create({
+  doc: "Hello World",
+  extensions: [keymap.of(defaultKeymap)],
+});
+
+let view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+You can also skip creating a separate state and pass everything to the `EditorView` constructor directly:
+
+```ts
+let view = new EditorView({
+  doc: "Hello World",
+  extensions: [keymap.of(defaultKeymap)],
+  parent: document.getElementById("editor"),
+});
+```
+
+When you use this shorthand, the view creates the `EditorState` internally.
+
+Here is a live editor created with `EditorView`. Type in it to see the editor in action:
+
+<HtmlPreview
+  title="Creating an EditorView"
+  height={280}
+  html={`<div id="editor"></div>`}
+  js={`
+    const state = CM.EditorState.create({
+      doc: "// Welcome to CodeMirror 6\\nfunction hello() {\\n  console.log(\\"Hello, world!\\");\\n}\\n\\nhello();\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+      ],
+    });
+
+    const view = new CM.EditorView({
+      state,
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { EditorState } from "@codemirror/state";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const state = EditorState.create({
+      doc: "// Welcome to CodeMirror 6\\nfunction hello() {\\n  console.log(\\"Hello, world!\\");\\n}\\n\\nhello();\\n",
+      extensions: [
+        basicSetup,
+        javascript(),
+      ],
+    });
+
+    const view = new EditorView({
+      state,
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## Dispatching Transactions
+
+`view.dispatch()` is how you apply state changes. It accepts one or more transaction specs:
+
+```ts
+// Insert text at position 0
+view.dispatch({
+  changes: { from: 0, insert: "// " },
+});
+
+// Replace a range
+view.dispatch({
+  changes: { from: 0, to: 5, insert: "Goodbye" },
+});
+
+// Move the cursor
+view.dispatch({
+  selection: { anchor: 10 },
+});
+```
+
+Each call to `dispatch()` creates a transaction, applies it to produce a new state, and re-renders the affected parts of the DOM.
+
+You can combine multiple changes in a single dispatch:
+
+```ts
+view.dispatch({
+  changes: [
+    { from: 0, insert: "// " },
+    { from: 20, insert: "\n" },
+  ],
+});
+```
+
+<Note>
+
+Positions in the `changes` array refer to the original document, not the document after earlier changes in the same array. CodeMirror handles the offset adjustments internally.
+
+</Note>
+
+## Accessing State
+
+The current state is always available through `view.state`:
+
+```ts
+console.log(view.state.doc.toString());
+console.log(view.state.selection.main.head);
+```
+
+After dispatching a transaction, `view.state` reflects the new state.
+
+## View Plugins vs State Fields
+
+CodeMirror provides two extension types for managing state over time:
+
+- **State fields** live inside `EditorState`. They are pure: given a transaction, they compute a new value. They cannot access the DOM.
+- **View plugins** live on `EditorView`. They can access the DOM, respond to viewport changes, and perform side effects. They receive an `update` object whenever the view updates.
+
+Use state fields when the data is purely derived from document content or transactions. Use view plugins when you need DOM access or need to react to viewport changes.
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+let myPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      // Runs once when the view is created
+      console.log("Editor mounted with", view.state.doc.length, "chars");
+    }
+
+    update(update) {
+      if (update.docChanged) {
+        console.log("Document changed");
+      }
+      if (update.viewportChanged) {
+        console.log("Viewport changed");
+      }
+    }
+
+    destroy() {
+      console.log("Plugin destroyed");
+    }
+  }
+);
+```
+
+Add view plugins as extensions:
+
+```ts
+let view = new EditorView({
+  extensions: [myPlugin],
+  parent: document.body,
+});
+```
+
+## DOM Event Handlers
+
+Use `EditorView.domEventHandlers()` to register handlers for DOM events on the editor:
+
+```ts
+let handlers = EditorView.domEventHandlers({
+  click(event, view) {
+    console.log("Clicked at", event.clientX, event.clientY);
+    // Return true to indicate the event was handled
+    return false;
+  },
+  keydown(event, view) {
+    if (event.key === "Escape") {
+      console.log("Escape pressed");
+      return true;
+    }
+    return false;
+  },
+});
+
+let view = new EditorView({
+  extensions: [handlers],
+  parent: document.body,
+});
+```
+
+Returning `true` from a handler prevents further processing of the event.
+
+## Theme System
+
+CodeMirror 6 uses a CSS-in-JS approach for styling. Themes are defined with `EditorView.theme()` and `EditorView.baseTheme()`.
+
+#### EditorView.theme()
+
+Creates a theme extension with high-specificity selectors that override base themes:
+
+```ts
+let myTheme = EditorView.theme({
+  "&": {
+    fontSize: "14px",
+    border: "1px solid #ddd",
+  },
+  ".cm-content": {
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  "&.cm-focused .cm-cursor": {
+    borderLeftColor: "#528bff",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#f5f5f5",
+    borderRight: "1px solid #ddd",
+  },
+});
+
+let view = new EditorView({
+  extensions: [myTheme],
+  parent: document.body,
+});
+```
+
+The `&` selector refers to the editor's outer element (the element with the `cm-editor` class).
+
+#### EditorView.baseTheme()
+
+Creates a base theme with lower specificity. Base themes provide defaults that a higher-priority theme can override:
+
+```ts
+let baseStyles = EditorView.baseTheme({
+  ".cm-tooltip": {
+    border: "1px solid #ccc",
+    padding: "4px",
+  },
+});
+```
+
+Extension authors typically use `baseTheme()` so users can override their styles with `theme()`.
+
+#### Dark Mode
+
+The `theme()` method accepts a second argument to specify the theme variant:
+
+```ts
+let darkTheme = EditorView.theme(
+  {
+    "&": {
+      backgroundColor: "#1e1e1e",
+      color: "#d4d4d4",
+    },
+  },
+  { dark: true }
+);
+```
+
+When `{ dark: true }` is set, the editor adds the `cm-dark` class to its root element, which allows base themes to provide dark-mode-specific styles.
+
+## Content Attributes
+
+Use `EditorView.contentAttributes` to add HTML attributes to the editor's content element:
+
+```ts
+let attrs = EditorView.contentAttributes.of({
+  "aria-label": "Code editor",
+  spellcheck: "false",
+  autocorrect: "off",
+});
+```
+
+This is a facet, so multiple extensions can contribute attributes that get merged.
+
+## Line Wrapping
+
+By default, CodeMirror uses horizontal scrolling for long lines. Enable line wrapping with `EditorView.lineWrapping`:
+
+```ts
+let view = new EditorView({
+  extensions: [EditorView.lineWrapping],
+  parent: document.body,
+});
+```
+
+## Scroll Into View
+
+To scroll the editor so that a given position is visible, dispatch a transaction with `scrollIntoView`:
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+view.dispatch({
+  effects: EditorView.scrollIntoView(100),
+});
+```
+
+You can also pass a range:
+
+```ts
+view.dispatch({
+  effects: EditorView.scrollIntoView(100, { y: "center" }),
+});
+```
+
+## Focus Management
+
+Check and control editor focus:
+
+```ts
+// Check if the editor has focus
+console.log(view.hasFocus);
+
+// Programmatically focus the editor
+view.focus();
+```
+
+When using `view.dispatch()` to set a selection, the editor does not automatically gain focus. Call `view.focus()` if you need the editor focused after a programmatic selection change.
+
+## Update Listener
+
+To react to any state update without creating a view plugin, use `EditorView.updateListener`:
+
+```ts
+let listener = EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    console.log("New content:", update.state.doc.toString());
+  }
+});
+```
+
+This is a convenient way to synchronize external state with the editor.
+
+## Destroying the View
+
+When you remove the editor from the page, call `destroy()` to clean up:
+
+```ts
+view.destroy();
+```
+
+This removes the editor DOM, detaches event listeners, and calls `destroy()` on all view plugins. After calling `destroy()`, the view should not be used.
+
+If you are working in a framework like React or Vue, call `destroy()` in the component's cleanup phase (e.g., `useEffect` cleanup or `onUnmounted`).

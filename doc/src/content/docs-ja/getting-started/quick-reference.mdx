@@ -1,0 +1,420 @@
+---
+title: クイックリファレンス
+description: CodeMirror 6 の一般的なパターン - import、エディタのセットアップ、コンテンツの操作、イベント処理。
+sidebar_position: 3
+---
+
+## よく使う import パターン
+
+```ts
+// Meta-package (includes basicSetup, EditorView, EditorState)
+import { EditorView, basicSetup } from "codemirror";
+
+// Core state
+import { EditorState, StateField, StateEffect, Facet } from "@codemirror/state";
+
+// Core view
+import { EditorView, keymap, lineNumbers, Decoration, ViewPlugin } from "@codemirror/view";
+
+// Commands and keymaps
+import { defaultKeymap, historyKeymap, history, undo, redo } from "@codemirror/commands";
+
+// Language support
+import { javascript } from "@codemirror/lang-javascript";
+import { markdown } from "@codemirror/lang-markdown";
+import { html } from "@codemirror/lang-html";
+import { css } from "@codemirror/lang-css";
+import { json } from "@codemirror/lang-json";
+import { python } from "@codemirror/lang-python";
+
+// Search
+import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
+
+// Autocomplete
+import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+
+// Linting
+import { linter, lintKeymap } from "@codemirror/lint";
+
+// Vim mode
+import { vim } from "@replit/codemirror-vim";
+```
+
+## 最小限のエディタセットアップ
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+
+const view = new EditorView({
+  doc: "// your code here\n",
+  extensions: [basicSetup, javascript()],
+  parent: document.getElementById("editor"),
+});
+```
+
+### basicSetup を使わないセットアップ
+
+どの機能を含めるかを完全に制御したい場合:
+
+```ts
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { defaultKeymap, historyKeymap, history } from "@codemirror/commands";
+import { javascript } from "@codemirror/lang-javascript";
+import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+
+const view = new EditorView({
+  state: EditorState.create({
+    doc: "// your code here\n",
+    extensions: [
+      lineNumbers(),
+      highlightActiveLine(),
+      history(),
+      syntaxHighlighting(defaultHighlightStyle),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      javascript(),
+    ],
+  }),
+  parent: document.getElementById("editor"),
+});
+```
+
+## エディタのコンテンツを取得する
+
+```ts
+// Get the full document as a string
+const content = view.state.doc.toString();
+
+// Get a specific line (1-indexed)
+const line = view.state.doc.line(1);
+console.log(line.text); // line content
+console.log(line.from); // start position
+console.log(line.to);   // end position
+
+// Get the number of lines
+const lineCount = view.state.doc.lines;
+
+// Get text in a range
+const slice = view.state.sliceDoc(0, 100);
+```
+
+## エディタのコンテンツを設定する
+
+```ts
+// Replace the entire document
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "new content here",
+  },
+});
+
+// Insert text at a position
+view.dispatch({
+  changes: { from: 10, insert: "inserted text" },
+});
+
+// Delete a range
+view.dispatch({
+  changes: { from: 5, to: 15 },
+});
+
+// Replace a range
+view.dispatch({
+  changes: { from: 5, to: 15, insert: "replacement" },
+});
+
+// Multiple changes in one transaction
+view.dispatch({
+  changes: [
+    { from: 0, to: 5, insert: "AAA" },
+    { from: 20, to: 25, insert: "BBB" },
+  ],
+});
+```
+
+<Warning>
+
+単一の Transaction で複数の変更を dispatch する場合、`changes` 配列内の位置は元のドキュメント（変更が適用される前）の位置を指します。CodeMirror が自動的に位置をマッピングします。
+
+</Warning>
+
+## エディタの状態全体を置き換える
+
+エディタを完全にリセットして新しい状態にする（新しいドキュメント、新しい Extension、すべてを新しく）場合:
+
+```ts
+view.setState(
+  EditorState.create({
+    doc: "brand new document",
+    extensions: [basicSetup, javascript()],
+  })
+);
+```
+
+## 変更をリッスンする
+
+### `updateListener` を使う方法
+
+```ts
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        console.log("Document changed:", update.state.doc.toString());
+      }
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+### `ViewPlugin` を使う方法
+
+View へのアクセスが必要なより複雑なロジックの場合:
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const changeTracker = ViewPlugin.fromClass(
+  class {
+    update(update: ViewUpdate) {
+      if (update.docChanged) {
+        // React to document changes
+        console.log("New length:", update.state.doc.length);
+      }
+      if (update.selectionSet) {
+        // React to selection changes
+        const { from, to } = update.state.selection.main;
+        console.log("Selection:", from, to);
+      }
+    }
+  }
+);
+```
+
+## エディタにフォーカスする
+
+```ts
+// Focus the editor
+view.focus();
+
+// Check if the editor has focus
+const hasFocus = view.hasFocus;
+```
+
+## 選択範囲
+
+```ts
+// Get the current selection
+const { from, to } = view.state.selection.main;
+
+// Get the selected text
+const selectedText = view.state.sliceDoc(from, to);
+
+// Set the cursor position (collapsed selection)
+view.dispatch({
+  selection: { anchor: 0 },
+});
+
+// Set a selection range
+view.dispatch({
+  selection: { anchor: 0, head: 10 },
+});
+
+// Set cursor position and scroll it into view
+view.dispatch({
+  selection: { anchor: 0 },
+  scrollIntoView: true,
+});
+```
+
+## Extension の追加と削除
+
+CodeMirror には `addExtension` / `removeExtension` の API はありません。代わりに、Compartment を使用してエディタの一部を動的に再設定します。
+
+### Compartment を使う方法
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+// Create a compartment for the language
+const languageConf = new Compartment();
+
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    languageConf.of(javascript()),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+// Later: switch the language to Python
+import { python } from "@codemirror/lang-python";
+
+view.dispatch({
+  effects: languageConf.reconfigure(python()),
+});
+
+// Remove the extension by reconfiguring with an empty array
+view.dispatch({
+  effects: languageConf.reconfigure([]),
+});
+```
+
+### Extension のオン/オフを切り替える
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { lineNumbers } from "@codemirror/view";
+
+const lineNumberConf = new Compartment();
+let lineNumbersEnabled = true;
+
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    lineNumberConf.of(lineNumbers()),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+function toggleLineNumbers() {
+  lineNumbersEnabled = !lineNumbersEnabled;
+  view.dispatch({
+    effects: lineNumberConf.reconfigure(
+      lineNumbersEnabled ? lineNumbers() : []
+    ),
+  });
+}
+```
+
+## Transaction の dispatch
+
+Transaction はエディタの状態を更新する唯一の方法です。`view.dispatch()` を呼び出すたびに、Transaction が作成され適用されます。
+
+```ts
+// Simple document change
+view.dispatch({
+  changes: { from: 0, insert: "Hello " },
+});
+
+// Change with selection update
+view.dispatch({
+  changes: { from: 0, insert: "Hello " },
+  selection: { anchor: 6 },
+});
+
+// Add an annotation to a transaction
+import { Annotation } from "@codemirror/state";
+
+const externalChange = Annotation.define<boolean>();
+
+view.dispatch({
+  changes: { from: 0, to: view.state.doc.length, insert: "reset" },
+  annotations: externalChange.of(true),
+});
+
+// Multiple sequential changes (applied as separate transactions)
+view.dispatch({ changes: { from: 0, insert: "A" } });
+view.dispatch({ changes: { from: 0, insert: "B" } });
+```
+
+## 読み取り専用モード
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { Compartment } from "@codemirror/state";
+
+const readOnlyConf = new Compartment();
+
+const view = new EditorView({
+  doc: "read-only content",
+  extensions: [
+    basicSetup,
+    readOnlyConf.of(EditorState.readOnly.of(true)),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+// Toggle read-only
+view.dispatch({
+  effects: readOnlyConf.reconfigure(
+    EditorState.readOnly.of(false)
+  ),
+});
+```
+
+## エディタの破棄
+
+```ts
+view.destroy();
+```
+
+これにより、エディタが DOM から削除され、イベントリスナーがクリーンアップされます。`destroy()` を呼び出した後は、`EditorView` インスタンスを使用しないでください。
+
+## テーマ
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const myTheme = EditorView.theme({
+  "&": {
+    fontSize: "14px",
+    backgroundColor: "#1e1e1e",
+  },
+  ".cm-content": {
+    fontFamily: "'Fira Code', monospace",
+    color: "#d4d4d4",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#252525",
+    color: "#858585",
+    border: "none",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "#2a2a2a",
+  },
+  "&.cm-focused .cm-cursor": {
+    borderLeftColor: "#ffffff",
+  },
+});
+
+const view = new EditorView({
+  doc: "",
+  extensions: [basicSetup, myTheme],
+  parent: document.getElementById("editor"),
+});
+```
+
+テーマセレクタでは `&` でエディタの外側の要素（`.cm-editor`）を参照します。すべての CSS プロパティは標準的なキャメルケース名を使用します。
+
+## DOM イベント
+
+```ts
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        if (event.key === "Escape") {
+          console.log("Escape pressed");
+          // Return true to prevent further handling
+          return false;
+        }
+      },
+      blur(event, view) {
+        console.log("Editor lost focus");
+      },
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```

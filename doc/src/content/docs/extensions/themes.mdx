@@ -1,0 +1,251 @@
+---
+title: Themes
+description: "Creating and applying themes in CodeMirror 6: EditorView.theme(), HighlightStyle for syntax colors, Lezer highlight tags, and community theme packages."
+sidebar_position: 3
+---
+
+## Theme System Overview
+
+Theming in CodeMirror 6 has two layers:
+
+- **Editor theme** -- Controls the appearance of the editor UI: background colors, gutter styles, cursor color, selection color, active line highlighting, and other structural elements. Created with `EditorView.theme()`.
+- **Syntax highlighting** -- Controls the colors and styles applied to tokens in the code (keywords, strings, comments, etc.). Created with `HighlightStyle.define()` and applied via `syntaxHighlighting()`.
+
+Both are extensions that you pass to `EditorState.create()`.
+
+## EditorView.theme()
+
+`EditorView.theme()` creates an editor theme extension from a set of CSS rules. The rules use CSS selectors scoped to the editor instance.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const myTheme = EditorView.theme({
+  "&": {
+    color: "#333",
+    backgroundColor: "#fff",
+  },
+  ".cm-content": {
+    caretColor: "#333",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#f5f5f5",
+    border: "none",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "rgba(0, 0, 0, 0.04)",
+  },
+  ".cm-selectionBackground": {
+    backgroundColor: "#d7e4f2",
+  },
+});
+```
+
+The `&` selector refers to the `.cm-editor` root element. All other selectors are scoped under it automatically.
+
+### The `dark` Option
+
+When creating a theme, you can pass a `dark` option to indicate that the theme is designed for dark backgrounds. This affects default styles and lets extensions adapt their behavior.
+
+```ts
+const darkTheme = EditorView.theme({
+  "&": {
+    color: "#e0e0e0",
+    backgroundColor: "#1e1e1e",
+  },
+}, { dark: true });
+```
+
+## EditorView.baseTheme()
+
+`EditorView.baseTheme()` creates a base theme that provides default styles. Base themes have lower precedence than regular themes, so they act as fallback styles that can be overridden.
+
+```ts
+const baseTheme = EditorView.baseTheme({
+  ".cm-tooltip": {
+    border: "1px solid #ddd",
+    backgroundColor: "#f5f5f5",
+  },
+});
+```
+
+Extension authors typically use `baseTheme()` to ship default styles with their extensions, ensuring they look reasonable out of the box while remaining overridable by the user's theme.
+
+## Common CSS Selectors
+
+These are the CSS selectors used in CodeMirror 6 themes:
+
+- `&` -- the `.cm-editor` wrapper element
+- `.cm-content` -- the editable content area
+- `.cm-line` -- an individual line in the editor
+- `.cm-gutters` -- the gutter container (holds line numbers, fold markers, etc.)
+- `.cm-gutter` -- an individual gutter column
+- `.cm-lineNumbers` -- the line number gutter specifically
+- `.cm-activeLine` -- the line where the cursor sits (when `highlightActiveLine()` is active)
+- `.cm-activeLineGutter` -- the gutter element for the active line
+- `.cm-cursor, .cm-dropCursor` -- the text cursor and drop cursor
+- `.cm-selectionBackground` -- the background behind selected text
+- `.cm-focused .cm-selectionBackground` -- selection background when the editor is focused
+- `.cm-tooltip` -- tooltip containers (autocompletion, hover info)
+- `.cm-panels` -- panels area (search panel, etc.)
+- `.cm-foldGutter` -- the fold gutter
+- `.cm-foldPlaceholder` -- the placeholder shown for folded regions
+
+## HighlightStyle for Syntax Highlighting
+
+`HighlightStyle.define()` creates a set of rules that map Lezer highlight tags to CSS styles. Each rule specifies a tag (or array of tags) and the style properties to apply.
+
+```ts
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const myHighlightStyle = HighlightStyle.define([
+  { tag: tags.comment, color: "#6a9955" },
+  { tag: tags.keyword, color: "#569cd6" },
+  { tag: tags.string, color: "#ce9178" },
+  { tag: tags.number, color: "#b5cea8" },
+  { tag: tags.variableName, color: "#9cdcfe" },
+  { tag: tags.function(tags.variableName), color: "#dcdcaa" },
+  { tag: tags.typeName, color: "#4ec9b0" },
+  { tag: tags.operator, color: "#d4d4d4" },
+  { tag: tags.heading, fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: tags.link, textDecoration: "underline" },
+]);
+```
+
+### syntaxHighlighting()
+
+To apply a `HighlightStyle` to the editor, wrap it in `syntaxHighlighting()`:
+
+```ts
+const extensions = [syntaxHighlighting(myHighlightStyle)];
+```
+
+### @lezer/highlight Tags
+
+The `tags` object from `@lezer/highlight` provides a standard set of token categories that language parsers use. Commonly used tags:
+
+- `tags.comment` -- comments
+- `tags.keyword` -- language keywords (`if`, `else`, `return`, etc.)
+- `tags.string` -- string literals
+- `tags.number` -- numeric literals
+- `tags.bool` -- boolean literals
+- `tags.variableName` -- variable names
+- `tags.function(tags.variableName)` -- function names (a modifier applied to `variableName`)
+- `tags.definition(tags.variableName)` -- variable definitions
+- `tags.typeName` -- type names
+- `tags.className` -- class names
+- `tags.propertyName` -- property names
+- `tags.operator` -- operators
+- `tags.punctuation` -- punctuation
+- `tags.heading` -- headings (in Markdown)
+- `tags.emphasis` -- emphasized text
+- `tags.strong` -- strong text
+- `tags.link` -- links
+- `tags.url` -- URLs
+
+The modifier functions like `tags.function()` and `tags.definition()` create subtypes. `tags.function(tags.variableName)` matches variable names that are used as function names, as determined by the language parser.
+
+## Theme Example with CSS Custom Properties
+
+Using CSS custom properties lets you adapt a CodeMirror theme to a site's design system without rebuilding the theme. The following example creates a complete theme using CSS variables:
+
+```ts
+import { EditorView } from "@codemirror/view";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const baseTheme = EditorView.theme({
+  "&": { color: "var(--fg)", backgroundColor: "var(--bg)" },
+  ".cm-content": { caretColor: "var(--cursor)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--cursor)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", border: "none" },
+  ".cm-activeLine": { backgroundColor: "rgba(0,0,0,0.04)" },
+}, { dark: true });
+
+const highlightStyle = HighlightStyle.define([
+  { tag: tags.comment, color: "var(--comment)" },
+  { tag: tags.keyword, color: "var(--keyword)" },
+  { tag: tags.string, color: "var(--string)" },
+  { tag: tags.number, color: "var(--number)" },
+  { tag: tags.function(tags.variableName), color: "var(--function)" },
+  { tag: tags.heading, color: "var(--heading)", fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: [tags.link, tags.url], textDecoration: "underline" },
+]);
+
+const theme = [baseTheme, syntaxHighlighting(highlightStyle)];
+```
+
+The CSS custom properties are defined on the parent element or `:root`:
+
+```css
+:root {
+  --fg: #e0e0e0;
+  --bg: #1e1e1e;
+  --cursor: #aeafad;
+  --comment: #6a9955;
+  --keyword: #569cd6;
+  --string: #ce9178;
+  --number: #b5cea8;
+  --function: #dcdcaa;
+  --heading: #569cd6;
+}
+```
+
+Here is a live editor with the `oneDark` theme applied:
+
+<HtmlPreview
+  title="One Dark Theme"
+  height={320}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// One Dark theme example\\nconst API_URL = "https://api.example.com";\\n\\nasync function fetchUsers() {\\n  const response = await fetch(API_URL + "/users");\\n  const data = await response.json();\\n  return data.filter(user => user.active);\\n}\\n\\nfetchUsers().then(users => {\\n  console.log("Active users:", users.length);\\n});\\n',
+      extensions: [CM.basicSetup, CM.javascript(), CM.oneDark],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+    import { oneDark } from "@codemirror/theme-one-dark";
+
+    const view = new EditorView({
+      doc: '// One Dark theme example\\nconst API_URL = "https://api.example.com";\\n\\nasync function fetchUsers() {\\n  const response = await fetch(API_URL + "/users");\\n  const data = await response.json();\\n  return data.filter(user => user.active);\\n}\\n\\nfetchUsers().then(users => {\\n  console.log("Active users:", users.length);\\n});\\n',
+      extensions: [basicSetup, javascript(), oneDark],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## Community Theme Packages
+
+Several community packages provide pre-built themes:
+
+- `@uiw/codemirror-themes-all` -- A collection of popular themes (GitHub, Dracula, Solarized, Nord, and others) packaged for CodeMirror 6
+- `@uiw/codemirror-theme-github` -- GitHub light and dark themes
+- `@uiw/codemirror-theme-vscode` -- VS Code dark theme
+- `thememirror` -- A collection of themes ported from popular editors
+
+Usage example with a community theme:
+
+```ts
+import { EditorView } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { githubDark } from "@uiw/codemirror-theme-github";
+
+const state = EditorState.create({
+  doc: "const x = 42;",
+  extensions: [githubDark],
+});
+```
+
+<Note>
+
+Community theme packages bundle both the editor theme and syntax highlighting together, so you typically do not need to add a separate `HighlightStyle` when using one.
+
+</Note>

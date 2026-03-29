@@ -1,0 +1,401 @@
+---
+title: Transactions
+description: "How transactions work in CodeMirror 6: document changes, selection updates, annotations, effects, filters, and dispatch."
+sidebar_position: 4
+---
+
+# Transactions
+
+Transactions are the mechanism for all state changes in CodeMirror 6. Every modification to the document, selection, or extension state goes through a transaction. A transaction describes a set of changes to apply to an `EditorState`, producing a new state.
+
+## What Is a Transaction
+
+A transaction wraps one or more changes and metadata into a single atomic update. You create transactions using `state.update()` or by passing a transaction spec to `view.dispatch()`.
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+let state = EditorState.create({ doc: "Hello" });
+let tr = state.update({
+  changes: { from: 5, insert: " World" },
+});
+
+console.log(tr.state.doc.toString()); // "Hello World"
+```
+
+The transaction (`tr`) holds:
+
+- `tr.state` -- the new state after applying the changes
+- `tr.changes` -- the change set describing what was modified
+- `tr.selection` -- the new selection (if it changed)
+- `tr.effects` -- any state effects included in the transaction
+- `tr.docChanged` -- boolean indicating whether the document changed
+
+## Creating Changes
+
+Changes describe insertions, deletions, and replacements. They use character positions in the original document.
+
+#### Insertion
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "// " },
+});
+```
+
+#### Deletion
+
+```ts
+view.dispatch({
+  changes: { from: 0, to: 5 },
+});
+```
+
+#### Replacement
+
+```ts
+view.dispatch({
+  changes: { from: 0, to: 5, insert: "Goodbye" },
+});
+```
+
+#### Multiple Changes
+
+You can include multiple changes in a single transaction. All positions refer to the original document -- CodeMirror adjusts offsets internally.
+
+```ts
+view.dispatch({
+  changes: [
+    { from: 0, insert: "// " },
+    { from: 10, to: 15, insert: "replacement" },
+  ],
+});
+```
+
+<Warning>
+
+When specifying multiple changes, the `from` positions must be in ascending order. CodeMirror throws an error if they are not.
+
+</Warning>
+
+## Selection Changes
+
+Update the selection by including a `selection` field:
+
+```ts
+import { EditorSelection } from "@codemirror/state";
+
+// Move cursor to position 10
+view.dispatch({
+  selection: { anchor: 10 },
+});
+
+// Select a range
+view.dispatch({
+  selection: EditorSelection.single(0, 10),
+});
+
+// Move cursor to end of document
+view.dispatch({
+  selection: { anchor: view.state.doc.length },
+});
+```
+
+You can combine document changes with selection changes. When you do, the selection positions refer to the document after the changes:
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "prefix " },
+  selection: { anchor: 7 }, // Position in the new document
+});
+```
+
+## Annotations
+
+Annotations attach metadata to a transaction. They do not change the state, but other extensions can read them to understand the context of a change.
+
+```ts
+import { Annotation } from "@codemirror/state";
+
+let myAnnotation = Annotation.define();
+
+view.dispatch({
+  changes: { from: 0, insert: "text" },
+  annotations: myAnnotation.of("programmatic"),
+});
+```
+
+CodeMirror includes a built-in annotation, `Transaction.userEvent`, that describes the type of user action:
+
+```ts
+import { Transaction } from "@codemirror/state";
+
+view.dispatch({
+  changes: { from: 0, insert: "text" },
+  annotations: Transaction.userEvent.of("input.type"),
+});
+```
+
+Extensions like the undo history read `Transaction.userEvent` to decide whether a change should be undoable, groupable, or ignored.
+
+Another built-in annotation is `Transaction.addToHistory`. Set it to `false` to prevent a change from being added to the undo history:
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "auto-generated" },
+  annotations: Transaction.addToHistory.of(false),
+});
+```
+
+## Effects and State Effects
+
+State effects are typed signals that can be included in a transaction. State fields can listen for specific effects to update their state.
+
+```ts
+import { StateEffect, StateField } from "@codemirror/state";
+
+// Define an effect type
+let setLanguage = StateEffect.define();
+
+// Define a state field that responds to the effect
+let languageField = StateField.define({
+  create() {
+    return "plaintext";
+  },
+  update(value, tr) {
+    for (let effect of tr.effects) {
+      if (effect.is(setLanguage)) {
+        return effect.value;
+      }
+    }
+    return value;
+  },
+});
+
+// Dispatch the effect
+view.dispatch({
+  effects: setLanguage.of("javascript"),
+});
+```
+
+Effects can carry any value. The `define()` call optionally takes a `map` function that adjusts the effect's value when document changes shift positions:
+
+```ts
+let addHighlight = StateEffect.define({
+  map: (value, mapping) => ({
+    from: mapping.mapPos(value.from),
+    to: mapping.mapPos(value.to),
+  }),
+});
+```
+
+## Dispatching Transactions
+
+When working with `EditorView`, call `view.dispatch()`:
+
+```ts
+// Dispatching a transaction spec
+view.dispatch({
+  changes: { from: 0, insert: "new text" },
+});
+
+// Dispatching a pre-built transaction
+let tr = view.state.update({
+  changes: { from: 0, insert: "new text" },
+});
+view.dispatch(tr);
+```
+
+When working with `EditorState` directly (without a view), use `state.update()` to get the new state without dispatching:
+
+```ts
+let tr = state.update({
+  changes: { from: 0, insert: "text" },
+});
+let newState = tr.state;
+```
+
+## Transaction Filters
+
+Transaction filters let extensions intercept and modify transactions before they are applied.
+
+#### Change Filters
+
+`EditorState.changeFilter` can suppress or modify document changes:
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+// Reject all changes (read-only behavior)
+let readOnly = EditorState.changeFilter.of(() => false);
+```
+
+The filter function receives a transaction and returns `true` (allow all changes), `false` (reject all changes), or an array of ranges to allow.
+
+#### Transaction Filters
+
+`EditorState.transactionFilter` can modify the entire transaction spec:
+
+```ts
+let forceUpperCase = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  let changes = [];
+  tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    let upper = inserted.toString().toUpperCase();
+    changes.push({ from: fromB, to: toB, insert: upper });
+  });
+  return [tr, { changes, sequential: true }];
+});
+```
+
+#### Transaction Extender
+
+`EditorState.transactionExtender` adds extra effects or annotations to transactions:
+
+```ts
+let timestampAnnotation = Annotation.define();
+
+let addTimestamp = EditorState.transactionExtender.of((tr) => {
+  if (tr.docChanged) {
+    return { annotations: timestampAnnotation.of(Date.now()) };
+  }
+  return null;
+});
+```
+
+## Example: Replacing All Text
+
+```ts
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "Completely new content",
+  },
+});
+```
+
+## Example: Inserting at Cursor Position
+
+```ts
+let cursor = view.state.selection.main.head;
+
+view.dispatch({
+  changes: { from: cursor, insert: "inserted text" },
+  selection: { anchor: cursor + "inserted text".length },
+});
+```
+
+Try the buttons below to see how transactions modify the editor state. "Insert Text" inserts at the cursor, "Replace All" replaces the entire document, and "Undo" reverts the last change:
+
+<HtmlPreview
+  title="Transactions Demo"
+  height={300}
+  html={`<div style="margin-bottom: 8px; display: flex; gap: 8px;"><button id="insert-btn" style="padding: 4px 12px; cursor: pointer;">Insert Text</button><button id="replace-btn" style="padding: 4px 12px; cursor: pointer;">Replace All</button><button id="undo-btn" style="padding: 4px 12px; cursor: pointer;">Undo</button></div><div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: "Hello, CodeMirror!\\nTry the buttons above to dispatch transactions.\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.history(),
+        CM.keymap.of(CM.historyKeymap),
+        CM.javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("insert-btn").addEventListener("click", () => {
+      const cursor = view.state.selection.main.head;
+      const text = " [inserted] ";
+      view.dispatch({
+        changes: { from: cursor, insert: text },
+        selection: { anchor: cursor + text.length },
+      });
+      view.focus();
+    });
+
+    document.getElementById("replace-btn").addEventListener("click", () => {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "// Document replaced via transaction\\nconsole.log(\\"fresh start\\");\\n",
+        },
+      });
+      view.focus();
+    });
+
+    document.getElementById("undo-btn").addEventListener("click", () => {
+      CM.undo(view);
+      view.focus();
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup, keymap } from "codemirror";
+    import { history, historyKeymap } from "@codemirror/commands";
+    import { undo } from "@codemirror/commands";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: "Hello, CodeMirror!\\nTry the buttons above to dispatch transactions.\\n",
+      extensions: [
+        basicSetup,
+        history(),
+        keymap.of(historyKeymap),
+        javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    // Insert text at cursor position
+    document.getElementById("insert-btn").addEventListener("click", () => {
+      const cursor = view.state.selection.main.head;
+      const text = " [inserted] ";
+      view.dispatch({
+        changes: { from: cursor, insert: text },
+        selection: { anchor: cursor + text.length },
+      });
+      view.focus();
+    });
+
+    // Replace entire document
+    document.getElementById("replace-btn").addEventListener("click", () => {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "// Document replaced via transaction\\nconsole.log(\\"fresh start\\");\\n",
+        },
+      });
+      view.focus();
+    });
+
+    // Undo last change
+    document.getElementById("undo-btn").addEventListener("click", () => {
+      undo(view);
+      view.focus();
+    });
+  `}
+/>
+
+## Example: Wrapping Selected Text
+
+```ts
+let { from, to } = view.state.selection.main;
+let selected = view.state.sliceDoc(from, to);
+
+view.dispatch({
+  changes: { from, to, insert: `[${selected}]` },
+  selection: { anchor: from + 1, head: from + 1 + selected.length },
+});
+```
+
+## Example: Replacing the Selection
+
+```ts
+let { from, to } = view.state.selection.main;
+
+view.dispatch({
+  changes: { from, to, insert: "replacement" },
+});
+```

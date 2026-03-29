@@ -1,0 +1,215 @@
+---
+title: パフォーマンスのヒント
+description: "CodeMirror 6 エディタのパフォーマンス最適化: 再作成の回避、Compartment の活用、デバウンス、遅延読み込み、パフォーマンスの計測。"
+sidebar_position: 5
+---
+
+# パフォーマンスのヒント
+
+CodeMirror 6 は大きなドキュメントを効率的に処理するよう設計されています。仮想スクロール、インクリメンタルパース、トランザクションベースのアーキテクチャにより、ほとんどの操作はそのまま高速に動作します。実際に発生するパフォーマンス問題は、通常アプリケーションレベルのパターンに起因します。具体的には、エディタの不要な再作成、キーストロークごとの重い処理の実行、未使用の言語文法の事前読み込みなどです。
+
+## エディタの再作成を避ける
+
+最もよくあるパフォーマンスの失敗は、何かが変更されたときに `EditorView` を破棄して再作成することです。エディタの作成には、DOM ツリーの構築、スタイルの計算、Extension の初期化、ドキュメントのパース、表示領域のレンダリングが含まれます。コンテンツの更新や Extension のトグルのためだけにエディタを再作成すると、これらの処理がすべて無駄になります。
+
+再作成したくなるが、代わりに dispatch や Compartment を使うべきケース:
+
+- ドキュメントコンテンツの変更 -- `view.dispatch({ changes: ... })` を使用
+- 言語モードの切り替え -- Compartment を使用
+- Extension のトグル（行番号、行の折り返し、読み取り専用）-- Compartment を使用
+- テーマの変更 -- Compartment を使用
+- 設定の更新（タブサイズ、インデント単位）-- Compartment を使用
+
+## 動的な変更には Compartment を使う
+
+`Compartment` を使うと、エディタを再作成せずに実行時に Extension を入れ替えられます。Compartment を一度作成し、初期の Extension に含め、後から再設定します。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { javascript } from "@codemirror/lang-javascript";
+import { python } from "@codemirror/lang-python";
+
+const languageCompartment = new Compartment();
+
+// Initial setup with JavaScript
+const extensions = [
+  languageCompartment.of(javascript()),
+  // other extensions...
+];
+
+// Later, switch to Python
+function switchToPython(view: EditorView) {
+  view.dispatch({
+    effects: languageCompartment.reconfigure(python()),
+  });
+}
+```
+
+Compartment の再設定は単一のトランザクションです。エディタを破棄して再構築するのではなく、Extension パイプラインの影響を受ける部分のみを再計算します。
+
+## 変更ハンドラーをデバウンスする
+
+ドキュメントの変更ごとに重い処理（ディスクへの保存、リンターの実行、プレビューの再レンダリング、サーバーへのコンテンツ送信）を行う場合は、デバウンスしてください。ドキュメントの変更は、入力された各文字、各バックスペース、各ペーストを含むすべてのキーストロークで発火します。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+function debounce<T extends (...args: any[]) => void>(
+  fn: T,
+  delay: number
+): T {
+  let timer: ReturnType<typeof setTimeout>;
+  return ((...args: any[]) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  }) as T;
+}
+
+const debouncedSave = debounce((content: string) => {
+  saveToServer(content);
+}, 500);
+
+const changeListener = EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    debouncedSave(update.state.doc.toString());
+  }
+});
+```
+
+遅延時間は処理のコストに応じて選択してください。保存やプレビューレンダリングには 300-500ms が一般的です。リンティングの場合、ユーザーが活発に入力している間の再リンティングを避けるために 500-1000ms が適しています。
+
+## 仮想スクロール
+
+CodeMirror 6 はビューポートに表示されている行と、その上下の小さなバッファのみをレンダリングします。これは組み込み機能であり、設定は不要です。100,000 行のドキュメントは 100 行のものと同じ速さでレンダリングされます。DOM に存在するのは表示部分のみだからです。
+
+つまり、レンダリングパフォーマンスについてはドキュメントサイズを心配する必要はありません。非常に大きなドキュメントでのボトルネックは、パース（ファイル全体のシンタックスハイライト）と `doc.toString()` 呼び出し（ツリー全体を単一の文字列に結合する）です。大きなドキュメントでは、変更のたびに `doc.toString()` を呼び出すのを避け、可能な場合は `doc.sliceString()` を使って特定の範囲を読み取ってください。
+
+## 言語モードの遅延読み込み
+
+`@codemirror/language-data` パッケージには多くの言語の定義が含まれていますが、遅延読み込みされます。Markdown の `codeLanguages` オプションに `languages` を渡すと、各言語の実際の文法はその言語タグを持つフェンスドコードブロックに遭遇したときにのみフェッチされます。
+
+```ts
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const markdownExtension = markdown({
+  base: markdownLanguage,
+  codeLanguages: languages,
+});
+```
+
+Markdown のフェンスドコードブロックを使用せず、単一言語のエディタを構築する場合は、必要な言語のみをインポートしてください。複数言語のサポートが不要な場合、`@codemirror/language-data` をインポートしないでください。このパッケージはサポートされているすべての言語の説明メタデータを取り込みます。
+
+## Extension の順序
+
+Extension は配列順に処理され、先に定義された Extension がキーバインディングとコマンドディスパッチで優先されます。これは主に機能面（どのキーバインディングが優先されるか）に影響しますが、パフォーマンスにもわずかな影響があります。最も頻繁にトリガーされる Extension を配列の先頭に置くことで、先にチェックされるようになります。
+
+たとえば、`vim()` を `basicSetup` より前に配置することで、Vim のキー処理がデフォルトのキーマップより先にチェックされ、Normal モードでの不要なキーマップの探索を回避できます。
+
+```ts
+const extensions = [
+  vim(),    // high-priority key handling
+  history(),
+  // other extensions
+  keymap.of(defaultKeymap), // lower-priority fallback
+];
+```
+
+## エディタのパフォーマンスを計測する
+
+ブラウザの Performance API を使って特定の操作を計測します。
+
+```ts
+// Measure dispatch time
+const start = performance.now();
+view.dispatch({
+  changes: { from: 0, to: view.state.doc.length, insert: largeContent },
+});
+const elapsed = performance.now() - start;
+console.log(`Dispatch took ${elapsed.toFixed(2)}ms`);
+```
+
+より詳細なプロファイリングには、Chrome DevTools の Performance パネルを使用します。以下の点に注目してください。
+
+- レンダリングタイムラインの長い「Update DOM」フェーズ。エディタが多すぎる DOM ノードをレンダリングしていることを示す
+- 頻繁な全ドキュメントの再パース。言語文法の問題を示している可能性がある
+- タイトループ内での DOM 計測の読み取り（`getBoundingClientRect` など）によるレイアウトスラッシング
+
+## スクロール操作での requestAnimationFrame
+
+エディタをプログラムでスクロールする場合（たとえば、「行へスクロール」の実装やプレビューペインとのスクロール同期）、`requestAnimationFrame` を使ってブラウザのレンダリングサイクルに処理をバッチ化します。
+
+```ts
+function scrollToLine(view: EditorView, lineNumber: number) {
+  const line = view.state.doc.line(lineNumber);
+  requestAnimationFrame(() => {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(line.from, { y: "start" }),
+    });
+  });
+}
+```
+
+`requestAnimationFrame` を使わないと、スクロールのディスパッチがブラウザのレイアウトと競合し、ジャンクを引き起こす可能性があります。
+
+## ViewPlugin での cancelAnimationFrame クリーンアップ
+
+`ViewPlugin` 内で `requestAnimationFrame` を使用する場合（たとえば、遅延レンダリングや計測のスケジューリング）、フレーム ID を保存し、プラグインの `destroy()` メソッドでキャンセルしてください。そうしないと、プラグインが削除された後にコールバックが発火し、古い状態を参照する可能性があります。
+
+```ts
+import { ViewPlugin, ViewUpdate, EditorView } from "@codemirror/view";
+
+const myPlugin = ViewPlugin.fromClass(
+  class {
+    private frameId: number | null = null;
+
+    constructor(view: EditorView) {
+      this.scheduleUpdate(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.scheduleUpdate(update.view);
+      }
+    }
+
+    private scheduleUpdate(view: EditorView) {
+      if (this.frameId !== null) {
+        cancelAnimationFrame(this.frameId);
+      }
+      this.frameId = requestAnimationFrame(() => {
+        this.frameId = null;
+        // Perform deferred work here
+        this.doExpensiveUpdate(view);
+      });
+    }
+
+    private doExpensiveUpdate(view: EditorView) {
+      // Measure DOM, update decorations, etc.
+    }
+
+    destroy() {
+      if (this.frameId !== null) {
+        cancelAnimationFrame(this.frameId);
+        this.frameId = null;
+      }
+    }
+  }
+);
+```
+
+<Warning>
+
+`destroy()` でアニメーションフレームをキャンセルし忘れることは、シングルページアプリケーションでエディタコンポーネントがユーザーのナビゲーションに伴い削除・再追加される場合に、アンマウント後のエラーの一般的な原因です。
+
+</Warning>
+
+## パターンのまとめ
+
+- エディタの再作成ではなく、`view.dispatch()` と Compartment を使用する
+- 重いハンドラー（保存、プレビュー、リンティング）を 300-1000ms の遅延でデバウンスする
+- 大きなドキュメントでスライスのみが必要な場合は `doc.toString()` を避ける
+- 必要な言語パッケージのみをインポートする
+- `ViewPlugin.destroy()` でアニメーションフレームとタイムアウトをキャンセルする
+- 実際の速度低下を調査する際は、推測するのではなく Chrome DevTools でプロファイリングする

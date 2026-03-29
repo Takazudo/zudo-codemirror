@@ -1,0 +1,216 @@
+---
+title: React との統合
+description: "CodeMirror 6 を React アプリケーションに埋め込むためのパターン: ライフサイクル管理、変更ハンドリング、外部状態の同期。"
+sidebar_position: 1
+---
+
+# React との統合
+
+CodeMirror 6 はバニラ JavaScript ライブラリです。独自の DOM と状態を内部的に管理するため、React との統合には 2 つのライフサイクルモデルの橋渡しが必要です。以下のパターンは本番環境の React アプリケーションから抽出したものです。
+
+## useRef によるエディタコンテナ
+
+エディタにはマウント先の DOM 要素が必要です。`useRef` を使ってコンテナ `<div>` への参照を保持し、`EditorView` の `parent` オプションに渡します。
+
+```tsx
+const containerRef = useRef<HTMLDivElement>(null);
+```
+
+JSX でコンテナ要素をレンダリングします。
+
+```tsx
+<div ref={containerRef} />
+```
+
+## useEffect によるエディタのライフサイクル
+
+マウント時に 1 回実行される `useEffect` 内で `EditorView` を作成します。クリーンアップ関数で `view.destroy()` を呼び出し、エディタを DOM から削除してリソースを解放します。
+
+```tsx
+useEffect(() => {
+  if (!containerRef.current) return;
+
+  const state = EditorState.create({
+    doc: initialContent,
+    extensions: [/* ... */],
+  });
+  const view = new EditorView({ state, parent: containerRef.current });
+
+  return () => {
+    view.destroy();
+  };
+}, []);
+```
+
+空の依存配列は意図的なものです。エディタは 1 回だけ作成されるべきです。エディタを再作成すると、カーソル位置、アンドゥ履歴、スクロール位置、およびユーザーが作業中の未保存状態がすべて破棄されます。
+
+## コンテンツの変更を処理する
+
+`EditorView.updateListener` を使って、エディタ内のドキュメント変更を監視します。ドキュメントが変更されるたびに `onChange` ハンドラーを呼び出します。
+
+```tsx
+EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    onChange(update.state.doc.toString());
+  }
+})
+```
+
+### コールバック Ref パターン
+
+ここに微妙な問題があります。`onChange` が props として渡され、レンダリングごとに参照が変わる場合（インラインのアロー関数ではよくあること）、その度にエディタを再作成したくはありません。解決策は、常に最新のコールバックを指すミュータブルな ref を使うことです。
+
+```tsx
+const onChangeRef = useRef(onChange);
+onChangeRef.current = onChange;
+```
+
+`updateListener` 内で、props を直接クロージャするのではなく、ref から読み取ります。
+
+```tsx
+EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    onChangeRef.current(update.state.doc.toString());
+  }
+})
+```
+
+これにより、リスナーはエディタを再作成することなく、常に最新バージョンの `onChange` を呼び出します。
+
+## 外部からのコンテンツ変更を同期する
+
+親コンポーネントが `content` props を更新した場合（たとえば、別のファイルを読み込んだ場合）、新しいコンテンツを既存のエディタにプッシュする必要があります。2 番目の `useEffect` で `content` props を監視し、エディタの現在のドキュメントが受け取った値と異なる場合にのみ、置換トランザクションをディスパッチします。
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+  }
+}, [content]);
+```
+
+等価チェック（`currentDoc !== content`）は無限ループを防止します。これがないと、エディタが変更をディスパッチしたときに `onChange` ハンドラーが発火し、親の状態が更新され、この Effect が再びトリガーされます。
+
+## 完全な useCodeMirrorEditor フック
+
+上記のパターンをすべて組み合わせたカスタムフックです。履歴サポート付きの Markdown エディタを作成し、ツールバーボタンや他の外部コントロール用の `insertAtCursor` ユーティリティを公開します。
+
+```tsx
+import { useRef, useEffect, useCallback } from "react";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+interface Props {
+  content: string;
+  onChange: (value: string) => void;
+}
+
+function useCodeMirrorEditor({ content, onChange }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const extensions = [
+      history(),
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChangeRef.current(update.state.doc.toString());
+        }
+      }),
+    ];
+
+    const state = EditorState.create({ doc: content, extensions });
+    const view = new EditorView({ state, parent: containerRef.current });
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []); // Only create once
+
+  // Sync external content changes
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const currentDoc = view.state.doc.toString();
+    if (currentDoc !== content) {
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: content },
+      });
+    }
+  }, [content]);
+
+  const insertAtCursor = useCallback((text: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const pos = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + text.length },
+    });
+  }, []);
+
+  return { containerRef, insertAtCursor };
+}
+```
+
+コンポーネントでの使用例:
+
+```tsx
+function MarkdownEditor() {
+  const [content, setContent] = useState("");
+  const { containerRef, insertAtCursor } = useCodeMirrorEditor({
+    content,
+    onChange: setContent,
+  });
+
+  return (
+    <div>
+      <button onClick={() => insertAtCursor("**bold**")}>Bold</button>
+      <div ref={containerRef} />
+    </div>
+  );
+}
+```
+
+<Warning>
+
+useEffect の依存配列にエディタの view や設定オブジェクトを含めないでください（本当にエディタを再作成したい場合を除く）。エディタを再作成すると、カーソル位置、アンドゥ履歴、スクロール位置が失われます。
+
+</Warning>
+
+## 外部から EditorView にアクセスする
+
+`viewRef` パターンにより、コンポーネント内のどこからでもエディタへの命令的なアクセスが可能になります。フォーカス管理、プログラムによるスクロール、現在の選択範囲の読み取りに便利です。
+
+```tsx
+// Focus the editor
+viewRef.current?.focus();
+
+// Read current selection
+const selection = viewRef.current?.state.selection.main;
+
+// Scroll to a position
+viewRef.current?.dispatch({
+  effects: EditorView.scrollIntoView(0),
+});
+```
+
+## StrictMode に関する注意
+
+React 18 の StrictMode では、開発環境で `useEffect` が 2 回実行されます。つまり、マウント時にエディタが作成され、破棄され、再度作成されます。これは想定通りの動作であり、本番環境では問題になりません。開発中に二重マウントが気になる場合も、`view.destroy()` は冪等であるため、クリーンアップ関数が正しく処理します。

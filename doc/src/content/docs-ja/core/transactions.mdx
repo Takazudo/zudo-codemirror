@@ -1,0 +1,401 @@
+---
+title: Transaction
+description: "CodeMirror 6 における Transaction の仕組み: ドキュメントの変更、選択範囲の更新、Annotation、Effect、フィルター、dispatch。"
+sidebar_position: 4
+---
+
+# Transaction
+
+Transaction は CodeMirror 6 におけるすべての状態変更のメカニズムです。ドキュメント、選択範囲、Extension の状態へのすべての変更は Transaction を通じて行われます。Transaction は `EditorState` に適用する一連の変更を記述し、新しい状態を生成します。
+
+## Transaction とは
+
+Transaction は 1 つ以上の変更とメタデータを単一のアトミックな更新にまとめます。Transaction は `state.update()` を使用するか、`view.dispatch()` に Transaction spec を渡して作成します。
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+let state = EditorState.create({ doc: "Hello" });
+let tr = state.update({
+  changes: { from: 5, insert: " World" },
+});
+
+console.log(tr.state.doc.toString()); // "Hello World"
+```
+
+Transaction（`tr`）には以下が含まれます:
+
+- `tr.state` -- 変更を適用した後の新しい状態
+- `tr.changes` -- 何が変更されたかを記述する ChangeSet
+- `tr.selection` -- 新しい選択範囲（変更された場合）
+- `tr.effects` -- Transaction に含まれる StateEffect
+- `tr.docChanged` -- ドキュメントが変更されたかどうかを示す boolean
+
+## 変更の作成
+
+変更は挿入、削除、置換を記述します。元のドキュメントの文字位置を使用します。
+
+#### 挿入
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "// " },
+});
+```
+
+#### 削除
+
+```ts
+view.dispatch({
+  changes: { from: 0, to: 5 },
+});
+```
+
+#### 置換
+
+```ts
+view.dispatch({
+  changes: { from: 0, to: 5, insert: "Goodbye" },
+});
+```
+
+#### 複数の変更
+
+単一の Transaction に複数の変更を含めることができます。すべての位置は元のドキュメントを参照し、CodeMirror が内部的にオフセットを調整します。
+
+```ts
+view.dispatch({
+  changes: [
+    { from: 0, insert: "// " },
+    { from: 10, to: 15, insert: "replacement" },
+  ],
+});
+```
+
+<Warning>
+
+複数の変更を指定する場合、`from` の位置は昇順でなければなりません。そうでない場合、CodeMirror はエラーをスローします。
+
+</Warning>
+
+## 選択範囲の変更
+
+`selection` フィールドを含めることで選択範囲を更新します:
+
+```ts
+import { EditorSelection } from "@codemirror/state";
+
+// Move cursor to position 10
+view.dispatch({
+  selection: { anchor: 10 },
+});
+
+// Select a range
+view.dispatch({
+  selection: EditorSelection.single(0, 10),
+});
+
+// Move cursor to end of document
+view.dispatch({
+  selection: { anchor: view.state.doc.length },
+});
+```
+
+ドキュメントの変更と選択範囲の変更を組み合わせることができます。その場合、選択範囲の位置は変更後のドキュメントを参照します:
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "prefix " },
+  selection: { anchor: 7 }, // Position in the new document
+});
+```
+
+## Annotation
+
+Annotation は Transaction にメタデータを付加します。状態は変更しませんが、他の Extension が変更のコンテキストを理解するために読み取ることができます。
+
+```ts
+import { Annotation } from "@codemirror/state";
+
+let myAnnotation = Annotation.define();
+
+view.dispatch({
+  changes: { from: 0, insert: "text" },
+  annotations: myAnnotation.of("programmatic"),
+});
+```
+
+CodeMirror には、ユーザーアクションの種類を記述する組み込みの Annotation `Transaction.userEvent` があります:
+
+```ts
+import { Transaction } from "@codemirror/state";
+
+view.dispatch({
+  changes: { from: 0, insert: "text" },
+  annotations: Transaction.userEvent.of("input.type"),
+});
+```
+
+undo 履歴などの Extension は `Transaction.userEvent` を読み取り、変更が undo 可能か、グループ化可能か、無視すべきかを判断します。
+
+もう 1 つの組み込み Annotation は `Transaction.addToHistory` です。`false` に設定すると、変更が undo 履歴に追加されるのを防ぎます:
+
+```ts
+view.dispatch({
+  changes: { from: 0, insert: "auto-generated" },
+  annotations: Transaction.addToHistory.of(false),
+});
+```
+
+## Effect と StateEffect
+
+StateEffect は Transaction に含めることができる型付きシグナルです。StateField は特定の Effect をリッスンして状態を更新できます。
+
+```ts
+import { StateEffect, StateField } from "@codemirror/state";
+
+// Define an effect type
+let setLanguage = StateEffect.define();
+
+// Define a state field that responds to the effect
+let languageField = StateField.define({
+  create() {
+    return "plaintext";
+  },
+  update(value, tr) {
+    for (let effect of tr.effects) {
+      if (effect.is(setLanguage)) {
+        return effect.value;
+      }
+    }
+    return value;
+  },
+});
+
+// Dispatch the effect
+view.dispatch({
+  effects: setLanguage.of("javascript"),
+});
+```
+
+Effect は任意の値を運ぶことができます。`define()` の呼び出しでは、ドキュメントの変更で位置がシフトしたときに Effect の値を調整する `map` 関数をオプションで指定できます:
+
+```ts
+let addHighlight = StateEffect.define({
+  map: (value, mapping) => ({
+    from: mapping.mapPos(value.from),
+    to: mapping.mapPos(value.to),
+  }),
+});
+```
+
+## Transaction の dispatch
+
+`EditorView` を使用する場合、`view.dispatch()` を呼び出します:
+
+```ts
+// Dispatching a transaction spec
+view.dispatch({
+  changes: { from: 0, insert: "new text" },
+});
+
+// Dispatching a pre-built transaction
+let tr = view.state.update({
+  changes: { from: 0, insert: "new text" },
+});
+view.dispatch(tr);
+```
+
+`EditorState` を直接（View なしで）操作する場合は、`state.update()` を使用して dispatch せずに新しい状態を取得します:
+
+```ts
+let tr = state.update({
+  changes: { from: 0, insert: "text" },
+});
+let newState = tr.state;
+```
+
+## Transaction フィルター
+
+Transaction フィルターを使用すると、Extension が Transaction を適用前にインターセプトして変更できます。
+
+#### Change フィルター
+
+`EditorState.changeFilter` はドキュメントの変更を抑制または変更できます:
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+// Reject all changes (read-only behavior)
+let readOnly = EditorState.changeFilter.of(() => false);
+```
+
+フィルター関数は Transaction を受け取り、`true`（すべての変更を許可）、`false`（すべての変更を拒否）、または許可する範囲の配列を返します。
+
+#### Transaction フィルター
+
+`EditorState.transactionFilter` は Transaction spec 全体を変更できます:
+
+```ts
+let forceUpperCase = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  let changes = [];
+  tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    let upper = inserted.toString().toUpperCase();
+    changes.push({ from: fromB, to: toB, insert: upper });
+  });
+  return [tr, { changes, sequential: true }];
+});
+```
+
+#### Transaction Extender
+
+`EditorState.transactionExtender` は Transaction に追加の Effect や Annotation を付加します:
+
+```ts
+let timestampAnnotation = Annotation.define();
+
+let addTimestamp = EditorState.transactionExtender.of((tr) => {
+  if (tr.docChanged) {
+    return { annotations: timestampAnnotation.of(Date.now()) };
+  }
+  return null;
+});
+```
+
+## 例: すべてのテキストを置換する
+
+```ts
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "Completely new content",
+  },
+});
+```
+
+## 例: カーソル位置に挿入する
+
+```ts
+let cursor = view.state.selection.main.head;
+
+view.dispatch({
+  changes: { from: cursor, insert: "inserted text" },
+  selection: { anchor: cursor + "inserted text".length },
+});
+```
+
+以下のボタンを使って、Transaction がエディタの状態をどのように変更するか試してみてください。「Insert Text」はカーソル位置にテキストを挿入し、「Replace All」はドキュメント全体を置換し、「Undo」は最後の変更を元に戻します:
+
+<HtmlPreview
+  title="Transactions Demo"
+  height={300}
+  html={`<div style="margin-bottom: 8px; display: flex; gap: 8px;"><button id="insert-btn" style="padding: 4px 12px; cursor: pointer;">Insert Text</button><button id="replace-btn" style="padding: 4px 12px; cursor: pointer;">Replace All</button><button id="undo-btn" style="padding: 4px 12px; cursor: pointer;">Undo</button></div><div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: "Hello, CodeMirror!\\nTry the buttons above to dispatch transactions.\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.history(),
+        CM.keymap.of(CM.historyKeymap),
+        CM.javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("insert-btn").addEventListener("click", () => {
+      const cursor = view.state.selection.main.head;
+      const text = " [inserted] ";
+      view.dispatch({
+        changes: { from: cursor, insert: text },
+        selection: { anchor: cursor + text.length },
+      });
+      view.focus();
+    });
+
+    document.getElementById("replace-btn").addEventListener("click", () => {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "// Document replaced via transaction\\nconsole.log(\\"fresh start\\");\\n",
+        },
+      });
+      view.focus();
+    });
+
+    document.getElementById("undo-btn").addEventListener("click", () => {
+      CM.undo(view);
+      view.focus();
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup, keymap } from "codemirror";
+    import { history, historyKeymap } from "@codemirror/commands";
+    import { undo } from "@codemirror/commands";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: "Hello, CodeMirror!\\nTry the buttons above to dispatch transactions.\\n",
+      extensions: [
+        basicSetup,
+        history(),
+        keymap.of(historyKeymap),
+        javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    // Insert text at cursor position
+    document.getElementById("insert-btn").addEventListener("click", () => {
+      const cursor = view.state.selection.main.head;
+      const text = " [inserted] ";
+      view.dispatch({
+        changes: { from: cursor, insert: text },
+        selection: { anchor: cursor + text.length },
+      });
+      view.focus();
+    });
+
+    // Replace entire document
+    document.getElementById("replace-btn").addEventListener("click", () => {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "// Document replaced via transaction\\nconsole.log(\\"fresh start\\");\\n",
+        },
+      });
+      view.focus();
+    });
+
+    // Undo last change
+    document.getElementById("undo-btn").addEventListener("click", () => {
+      undo(view);
+      view.focus();
+    });
+  `}
+/>
+
+## 例: 選択テキストを囲む
+
+```ts
+let { from, to } = view.state.selection.main;
+let selected = view.state.sliceDoc(from, to);
+
+view.dispatch({
+  changes: { from, to, insert: `[${selected}]` },
+  selection: { anchor: from + 1, head: from + 1 + selected.length },
+});
+```
+
+## 例: 選択範囲を置換する
+
+```ts
+let { from, to } = view.state.selection.main;
+
+view.dispatch({
+  changes: { from, to, insert: "replacement" },
+});
+```

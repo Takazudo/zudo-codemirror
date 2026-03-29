@@ -1,0 +1,212 @@
+---
+title: クリップボード統合
+description: "@replit/codemirror-vim で Vim レジスタをシステムクリップボードと同期させる方法。"
+sidebar_position: 5
+---
+
+# クリップボード統合
+
+デフォルトでは、`@replit/codemirror-vim` の Vim レジスタは内部的なもので、ヤンクやペーストの操作はシステムクリップボードとやり取りしません。このページでは、そのギャップを埋める方法を解説します。
+
+## 課題
+
+ターミナルの Vim では、`"+` と `"*` レジスタがシステムクリップボードと選択バッファに接続されています。しかしブラウザベースのエディターでは、これらのレジスタはシステムとの統合がないメモリ上のオブジェクトに過ぎません。`"+y` でテキストをヤンクしても内部に保存されるだけで OS のクリップボードにはコピーされず、`"+p` も内部レジスタからペーストするだけで、他のアプリケーションからコピーした内容は取得できません。
+
+## Register Controller API
+
+`Vim` オブジェクトはすべての名前付きレジスタを管理する Register Controller を公開しています。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+const controller = Vim.getRegisterController();
+const registers = controller.registers;
+```
+
+各レジスタはテキストの取得と設定のためのメソッドを持つオブジェクトです。任意のレジスタを、システムクリップボードと同期するカスタム実装に置き換えることができます。
+
+## クリップボードレジスタの作成
+
+以下の実装は、ヤンクのたびに `navigator.clipboard` に書き込み、ペースト操作用にテキストをローカルに保持するレジスタオブジェクトを作成します。
+
+```ts
+function createClipboardRegister() {
+  const register = {
+    keyBuffer: [] as string[],
+    insertModeChanges: [] as never[],
+    searchQueries: [] as string[],
+    linewise: false,
+    blockwise: false,
+
+    setText(text?: string, linewise?: boolean, blockwise?: boolean) {
+      register.keyBuffer = text ? [text] : [];
+      register.linewise = !!linewise;
+      register.blockwise = !!blockwise;
+      if (text) {
+        navigator.clipboard.writeText(text).catch(console.warn);
+      }
+    },
+
+    pushText(text: string, linewise?: boolean) {
+      register.keyBuffer.push(text);
+      register.linewise = !!linewise;
+      navigator.clipboard
+        .writeText(register.keyBuffer.join("\n"))
+        .catch(console.warn);
+    },
+
+    pushInsertModeChanges(_changes: never) {},
+
+    pushSearchQuery(_query: string) {},
+
+    clear() {
+      register.keyBuffer = [];
+      register.linewise = false;
+      register.blockwise = false;
+    },
+
+    toString() {
+      return register.keyBuffer.join("\n");
+    },
+  };
+
+  return register;
+}
+```
+
+## クリップボードレジスタの置き換え
+
+`*` と `+` レジスタをクリップボード対応の実装に置き換えます。
+
+```ts
+const controller = Vim.getRegisterController();
+const registers = controller.registers;
+const clipboardRegister = createClipboardRegister();
+
+registers["*"] = clipboardRegister;
+registers["+"] = clipboardRegister;
+```
+
+これにより、`"+y` と `"*y` はシステムクリップボードにコピーし、`"+p` / `"*p` は内部バッファ（ヤンク時に同期されます）からペーストするようになります。
+
+## clipboard=unnamedplus の動作
+
+Vim では `set clipboard=unnamedplus` によって、デフォルト（無名）レジスタを `+` レジスタのエイリアスにできます。すべてのヤンクと削除がレジスタプレフィックスなしでシステムクリップボードに反映されます。
+
+これを再現するには、無名レジスタ（`"`）も置き換えます。
+
+```ts
+registers['"'] = clipboardRegister;
+controller.unnamedRegister = clipboardRegister;
+```
+
+これにより、通常の `yy` でシステムクリップボードにコピーされ、`p` で最後にヤンクした内容がペーストされます。
+
+## フォーカス時のクリップボード同期
+
+上記のアプローチの制限として、エディターの外部でコピーされたテキスト（例: 別のアプリケーション）は `p` で自動的に利用できません。内部レジスタはエディター内でヤンクされたテキストしか把握していないためです。
+
+外部クリップボードの内容を処理するには、エディターがフォーカスを得たときに `navigator.clipboard` から読み取ります。
+
+```ts
+view.dom.addEventListener("focus", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      clipboardRegister.keyBuffer = [text];
+      clipboardRegister.linewise = false;
+      clipboardRegister.blockwise = false;
+    }
+  } catch {
+    // clipboard read may fail if permission is denied
+  }
+});
+```
+
+<Warning>
+
+`navigator.clipboard.readText()` にはクリップボード読み取り権限が必要です。一部のブラウザでは、ドキュメントがフォーカスされると自動的に権限が付与されます。その他のブラウザでは、ユーザーに権限プロンプトが表示される場合があります。権限が拒否された場合、catch ブロックがエラーを暗黙的に処理します。
+
+</Warning>
+
+## 完全な実装
+
+すべてをまとめた実装です。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorView } from "@codemirror/view";
+
+function createClipboardRegister() {
+  const register = {
+    keyBuffer: [] as string[],
+    insertModeChanges: [] as never[],
+    searchQueries: [] as string[],
+    linewise: false,
+    blockwise: false,
+
+    setText(text?: string, linewise?: boolean, blockwise?: boolean) {
+      register.keyBuffer = text ? [text] : [];
+      register.linewise = !!linewise;
+      register.blockwise = !!blockwise;
+      if (text) {
+        navigator.clipboard.writeText(text).catch(console.warn);
+      }
+    },
+
+    pushText(text: string, linewise?: boolean) {
+      register.keyBuffer.push(text);
+      register.linewise = !!linewise;
+      navigator.clipboard
+        .writeText(register.keyBuffer.join("\n"))
+        .catch(console.warn);
+    },
+
+    pushInsertModeChanges(_changes: never) {},
+
+    pushSearchQuery(_query: string) {},
+
+    clear() {
+      register.keyBuffer = [];
+      register.linewise = false;
+      register.blockwise = false;
+    },
+
+    toString() {
+      return register.keyBuffer.join("\n");
+    },
+  };
+
+  return register;
+}
+
+function setupClipboardIntegration(view: EditorView) {
+  const controller = Vim.getRegisterController();
+  const registers = controller.registers;
+  const clipboardRegister = createClipboardRegister();
+
+  // Replace system clipboard registers
+  registers["*"] = clipboardRegister;
+  registers["+"] = clipboardRegister;
+
+  // Make unnamed register use clipboard (clipboard=unnamedplus)
+  registers['"'] = clipboardRegister;
+  controller.unnamedRegister = clipboardRegister;
+
+  // Sync external clipboard on focus
+  view.dom.addEventListener("focus", async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        clipboardRegister.keyBuffer = [text];
+        clipboardRegister.linewise = false;
+        clipboardRegister.blockwise = false;
+      }
+    } catch {
+      // clipboard-read permission denied
+    }
+  });
+}
+```
+
+EditorView の作成後に `setupClipboardIntegration(view)` を呼び出してください。

@@ -1,0 +1,460 @@
+---
+title: Extensions
+description: "CodeMirror 6 extension system: facets, state fields, view plugins, compartments, precedence, and built-in extensions."
+sidebar_position: 5
+---
+
+# Extensions
+
+CodeMirror 6 has almost no built-in behavior. Line numbers, syntax highlighting, keybindings, undo history -- all of these are extensions. The extension system is the primary way to configure and customize the editor.
+
+## What Is an Extension
+
+An extension is a value that you pass to `EditorState.create()` via the `extensions` array. It can be:
+
+- A facet value (created with `facet.of(value)`)
+- A state field (created with `StateField.define()`)
+- A view plugin (created with `ViewPlugin.define()` or `ViewPlugin.fromClass()`)
+- An array of other extensions (nested arrays are flattened)
+- A compartment wrapper (created with `compartment.of(extension)`)
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let view = new EditorView({
+  extensions: [
+    lineNumbers(),
+    keymap.of(defaultKeymap),
+    EditorView.lineWrapping,
+    EditorState.tabSize.of(2),
+  ],
+  parent: document.body,
+});
+```
+
+## Extension Arrays
+
+Extensions compose through flat arrays. Nesting is allowed -- CodeMirror flattens all arrays:
+
+```ts
+let editorSetup = [lineNumbers(), EditorView.lineWrapping];
+
+let keybindings = [keymap.of(defaultKeymap)];
+
+// These are equivalent:
+let extensions = [editorSetup, keybindings];
+// Flattens to: [lineNumbers(), EditorView.lineWrapping, keymap.of(defaultKeymap)]
+```
+
+This makes it natural to create reusable extension bundles as arrays.
+
+## Compartments
+
+Compartments allow you to reconfigure extensions after the editor is created. Wrap an extension in a compartment, and later dispatch an effect to replace it.
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+let language = new Compartment();
+let tabSize = new Compartment();
+
+let view = new EditorView({
+  extensions: [
+    language.of([]),
+    tabSize.of(EditorState.tabSize.of(4)),
+  ],
+  parent: document.body,
+});
+```
+
+Reconfigure a compartment by dispatching its `reconfigure` effect:
+
+```ts
+// Change tab size to 2
+view.dispatch({
+  effects: tabSize.reconfigure(EditorState.tabSize.of(2)),
+});
+
+// Load a language
+import { javascript } from "@codemirror/lang-javascript";
+
+view.dispatch({
+  effects: language.reconfigure(javascript()),
+});
+
+// Remove the language (pass empty extension)
+view.dispatch({
+  effects: language.reconfigure([]),
+});
+```
+
+You can read the current content of a compartment with `compartment.get()`:
+
+```ts
+let currentLang = language.get(view.state);
+```
+
+<Tip>
+
+Compartments are the intended way to toggle extensions on/off or swap configurations dynamically. Do not recreate the entire editor to change settings.
+
+</Tip>
+
+## Facets
+
+A facet is a named extension point that collects values from multiple sources and combines them into a single output. Facets are defined with `Facet.define()`.
+
+#### Built-in Facets
+
+CodeMirror includes several built-in facets:
+
+- `EditorState.tabSize` -- tab character width (default: 4)
+- `EditorState.readOnly` -- whether the editor is read-only
+- `EditorState.phrases` -- translation strings
+- `EditorState.languageData` -- language-specific configuration
+- `EditorView.contentAttributes` -- HTML attributes on the content element
+- `EditorView.editorAttributes` -- HTML attributes on the editor wrapper
+- `EditorView.decorations` -- decorations provided by extensions
+- `EditorView.updateListener` -- callbacks for state updates
+
+#### Using Facets
+
+Provide a value to a facet with `.of()`:
+
+```ts
+let ext = EditorState.tabSize.of(2);
+```
+
+Read a facet value with `state.facet()`:
+
+```ts
+let size = state.facet(EditorState.tabSize); // 2
+```
+
+#### Defining Custom Facets
+
+```ts
+import { Facet } from "@codemirror/state";
+
+// A facet that combines values by taking the first one
+let maxLineLength = Facet.define({
+  combine: (values) => (values.length ? Math.min(...values) : 80),
+});
+
+// Provide a value
+let ext = maxLineLength.of(120);
+
+// Read the combined value
+let max = state.facet(maxLineLength);
+```
+
+The `combine` function receives all provided values and returns a single result. Common combining strategies:
+
+- Take the first value (for single-value configuration)
+- Collect into an array (for multi-value configuration)
+- Merge or reduce (for aggregated configuration)
+
+#### Computed Facets
+
+A facet can derive its value from other parts of the state:
+
+```ts
+let lineCount = Facet.define({
+  combine: (values) => values[0],
+});
+
+let computedLineCount = lineCount.compute(["doc"], (state) => {
+  return state.doc.lines;
+});
+```
+
+## StateField
+
+A state field holds a value that updates with each transaction. It is the primary way to maintain custom state across updates.
+
+```ts
+import { StateField } from "@codemirror/state";
+
+let wordCount = StateField.define({
+  create(state) {
+    return countWords(state.doc.toString());
+  },
+  update(value, tr) {
+    if (tr.docChanged) {
+      return countWords(tr.state.doc.toString());
+    }
+    return value;
+  },
+});
+
+function countWords(text) {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+```
+
+State fields can also provide extensions through their `provide` option:
+
+```ts
+let myField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decos, tr) {
+    // update decorations...
+    return decos;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+```
+
+## ViewPlugin
+
+A view plugin runs code in response to view updates and has access to the DOM. Use it when you need side effects that state fields cannot handle.
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+let charCounter = ViewPlugin.fromClass(
+  class {
+    dom;
+
+    constructor(view) {
+      this.dom = document.createElement("div");
+      this.dom.className = "char-count";
+      this.dom.textContent = `${view.state.doc.length} chars`;
+      view.dom.appendChild(this.dom);
+    }
+
+    update(update) {
+      if (update.docChanged) {
+        this.dom.textContent = `${update.state.doc.length} chars`;
+      }
+    }
+
+    destroy() {
+      this.dom.remove();
+    }
+  }
+);
+```
+
+View plugins can also provide decorations, event handlers, and other view-level values through their spec:
+
+```ts
+let myPlugin = ViewPlugin.fromClass(MyPluginClass, {
+  decorations: (plugin) => plugin.decorations,
+  eventHandlers: {
+    click(event, view) {
+      // handle click
+      return false;
+    },
+  },
+});
+```
+
+## Extension Precedence
+
+When multiple extensions provide values for the same facet or keymap, order matters. By default, extensions listed earlier take priority. You can override this with `Prec`:
+
+```ts
+import { Prec } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+
+let myKeymap = keymap.of([
+  { key: "Ctrl-s", run: () => { console.log("save"); return true; } },
+]);
+
+// Ensure this keymap takes priority over others
+let highPriority = Prec.high(myKeymap);
+
+// Or guarantee it runs first
+let highest = Prec.highest(myKeymap);
+```
+
+The precedence levels, from highest to lowest:
+
+- `Prec.highest`
+- `Prec.high`
+- (default -- no wrapper)
+- `Prec.low`
+- `Prec.lowest`
+
+## Built-in Extensions
+
+CodeMirror provides many extensions across its packages:
+
+From `@codemirror/view`:
+
+- `lineNumbers()` -- gutter with line numbers
+- `highlightActiveLine()` -- highlight the line the cursor is on
+- `highlightActiveLineGutter()` -- highlight the active line's gutter
+- `highlightSpecialChars()` -- render control characters visibly
+- `drawSelection()` -- custom selection drawing (required for multiple selections)
+- `dropCursor()` -- show cursor position during drag-and-drop
+- `rectangularSelection()` -- Alt+drag rectangular selection
+- `crosshairCursor()` -- crosshair cursor during Alt+drag
+- `EditorView.lineWrapping` -- enable soft line wrapping
+- `placeholder(text)` -- placeholder text when the editor is empty
+
+From `@codemirror/commands`:
+
+- `history()` -- undo/redo support
+- `defaultKeymap` -- standard editing keybindings
+- `historyKeymap` -- Ctrl-Z / Ctrl-Y keybindings
+
+From `@codemirror/search`:
+
+- `search()` -- search and replace panel
+- `searchKeymap` -- Ctrl-F / Ctrl-H keybindings
+- `highlightSelectionMatches()` -- highlight text matching the selection
+
+From `@codemirror/autocomplete`:
+
+- `autocompletion()` -- autocomplete popup
+- `closeBrackets()` -- auto-close brackets and quotes
+- `closeBracketsKeymap` -- related keybindings
+
+From `@codemirror/language`:
+
+- `bracketMatching()` -- highlight matching brackets
+- `foldGutter()` -- code folding gutter
+- `indentOnInput()` -- re-indent after typing specific characters
+- `syntaxHighlighting()` -- apply highlight styles to syntax tree
+
+From `@codemirror/lint`:
+
+- `linter()` -- run a linting function and display diagnostics
+- `lintGutter()` -- show lint markers in the gutter
+
+## basicSetup and minimalSetup
+
+The `codemirror` package exports two convenience bundles:
+
+#### basicSetup
+
+A comprehensive set of extensions suitable for most use cases:
+
+```ts
+import { basicSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [basicSetup],
+  parent: document.body,
+});
+```
+
+`basicSetup` includes line numbers, active line highlighting, history, bracket matching, autocompletion, search, and many other common extensions.
+
+#### minimalSetup
+
+A smaller set for lightweight editors:
+
+```ts
+import { minimalSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [minimalSetup],
+  parent: document.body,
+});
+```
+
+`minimalSetup` includes just the default keymap, history, draw selection, drop cursor, special character highlighting, undo/redo, and bracket matching.
+
+<Note>
+
+Both bundles are just arrays of extensions. You can spread them into your own array and add or override specific extensions.
+
+</Note>
+
+```ts
+import { basicSetup } from "codemirror";
+import { EditorView } from "@codemirror/view";
+
+let view = new EditorView({
+  extensions: [
+    basicSetup,
+    EditorView.lineWrapping,
+    EditorState.tabSize.of(2),
+    // Additional extensions...
+  ],
+  parent: document.body,
+});
+```
+
+## Example: Creating a Custom Extension
+
+Here is a state field that tracks whether the document has been modified from its initial content, paired with a view plugin that shows an indicator in the DOM:
+
+```ts
+import { StateField, StateEffect } from "@codemirror/state";
+import { EditorView, ViewPlugin } from "@codemirror/view";
+
+// Effect to mark the document as "saved"
+let markSaved = StateEffect.define();
+
+// State field tracking dirty status
+let dirtyField = StateField.define({
+  create() {
+    return false;
+  },
+  update(isDirty, tr) {
+    for (let effect of tr.effects) {
+      if (effect.is(markSaved)) return false;
+    }
+    if (tr.docChanged) return true;
+    return isDirty;
+  },
+});
+
+// View plugin showing dirty indicator
+let dirtyIndicator = ViewPlugin.fromClass(
+  class {
+    dom;
+
+    constructor(view) {
+      this.dom = document.createElement("div");
+      this.dom.className = "dirty-indicator";
+      this.updateDisplay(view.state.field(dirtyField));
+      view.dom.parentNode?.insertBefore(this.dom, view.dom);
+    }
+
+    update(update) {
+      let dirty = update.state.field(dirtyField);
+      if (dirty !== update.startState.field(dirtyField)) {
+        this.updateDisplay(dirty);
+      }
+    }
+
+    updateDisplay(isDirty) {
+      this.dom.textContent = isDirty ? "Unsaved changes" : "Saved";
+    }
+
+    destroy() {
+      this.dom.remove();
+    }
+  }
+);
+
+// Bundle into a single extension
+function dirtyTracking() {
+  return [dirtyField, dirtyIndicator];
+}
+```
+
+Use it:
+
+```ts
+let view = new EditorView({
+  extensions: [basicSetup, dirtyTracking()],
+  parent: document.body,
+});
+
+// Later, mark as saved:
+view.dispatch({
+  effects: markSaved.of(null),
+});
+```

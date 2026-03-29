@@ -1,0 +1,143 @@
+---
+title: アーキテクチャ
+description: "CodeMirror 6 のアーキテクチャの概要: 関数型コア、イミュータブルな状態、Transaction ベースの更新、Extension システム。"
+sidebar_position: 1
+---
+
+# アーキテクチャ
+
+CodeMirror 6 は、関心事を関数型コアと命令型シェルに分離した、ゼロからの書き直しです。このページでは、エディタの操作方法を形作る基本的な設計上の決定について説明します。
+
+## 関数型コアと命令型シェル
+
+アーキテクチャは 2 つのレイヤーに分かれています:
+
+- `EditorState`（`@codemirror/state` から） -- 関数型コア。ドキュメント、選択範囲、およびすべての設定された状態を保持します。イミュータブルであり、直接変更することはありません。
+- `EditorView`（`@codemirror/view` から） -- 命令型シェル。DOM を所有し、レンダリングを処理し、ユーザーインタラクションを調整します。現在の `EditorState` への参照を保持し、Transaction を通じて更新します。
+
+この分離により、状態ロジックを DOM に触れることなくテストし、推論できます。
+
+## イミュータブルな状態モデル
+
+`EditorState` はイミュータブルです。ドキュメントの内容、選択範囲、StateField など、何かを変更するには、変更を記述する Transaction を作成します。その Transaction を適用すると、新しい `EditorState` が生成されます。古い状態は変更されません。
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+let state = EditorState.create({ doc: "Hello" });
+let tr = state.update({ changes: { from: 5, insert: " World" } });
+let newState = tr.state;
+
+console.log(state.doc.toString()); // "Hello"
+console.log(newState.doc.toString()); // "Hello World"
+```
+
+これは CodeMirror 5 とは根本的に異なります。CodeMirror 5 では、`setValue()` や `replaceRange()` などのメソッドを呼び出すことで、エディタの内部状態を直接変更するミュータブルモデルを使用していました。
+
+## Transaction ベースの更新
+
+すべての状態変更は Transaction を通じて行われます。Transaction には以下を含めることができます:
+
+- ドキュメントの変更（挿入、削除、置換）
+- 選択範囲の更新
+- Annotation（Transaction に付加されるメタデータ）
+- StateEffect（StateField やその他の Extension へのシグナル）
+
+`EditorView` を使用する場合、`view.dispatch(transaction)` を呼び出して Transaction を適用し、状態と DOM の両方を更新します。
+
+```ts
+// Dispatch a change through the view
+view.dispatch({
+  changes: { from: 0, insert: "// " },
+});
+```
+
+Transaction の詳細は [Transaction](./transactions.mdx) ページで説明しています。
+
+## Extension システム
+
+CodeMirror 6 には、テキストのレンダリング以外の組み込み動作はありません。行番号、シンタックスハイライト、キーバインディング、括弧のマッチングなど、すべてが Extension を通じて提供されます。
+
+Extension は `EditorState.create()` に渡す値（または値の配列）です。Extension はフラットな配列に展開されて合成されるため、関連する Extension をバンドルにまとめ、自由に組み合わせることができます。
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let state = EditorState.create({
+  doc: "Hello",
+  extensions: [lineNumbers(), keymap.of(defaultKeymap)],
+});
+```
+
+Extension システムの詳細は [Extension](./extensions.mdx) ページで説明しています。
+
+## Facet と StateField
+
+Extension を機能させる 2 つのコアメカニズムがあります:
+
+#### Facet
+
+Facet は、複数のプロバイダーから値を収集し、それらを結合する名前付きの拡張ポイントです。Facet は、異なる Extension からの貢献をマージする必要がある設定に使用されます。
+
+たとえば、`EditorState.tabSize` は Facet です。理論的には複数の Extension がタブサイズを提供できますが、Facet の結合関数が最終的な値を決定します。最初に提供された値を採用する Facet もあれば、すべての値を配列に収集する Facet もあります。
+
+```ts
+import { EditorState } from "@codemirror/state";
+
+let state = EditorState.create({
+  extensions: [EditorState.tabSize.of(4)],
+});
+console.log(state.facet(EditorState.tabSize)); // 4
+```
+
+#### StateField
+
+StateField は、各 Transaction で更新される計算された状態を保持します。Facet とは異なり、StateField は `create` 関数と `update` 関数を使用して、Transaction をまたいで独自の値を維持します。
+
+```ts
+import { StateField } from "@codemirror/state";
+
+let wordCount = StateField.define({
+  create(state) {
+    return state.doc.toString().split(/\s+/).filter(Boolean).length;
+  },
+  update(value, tr) {
+    if (tr.docChanged) {
+      return tr.state.doc.toString().split(/\s+/).filter(Boolean).length;
+    }
+    return value;
+  },
+});
+```
+
+## Extension の合成
+
+Extension はフラットな配列です。ネストされた配列を渡すと、フラットに展開されます:
+
+```ts
+let myBundle = [lineNumbers(), keymap.of(defaultKeymap)];
+
+let state = EditorState.create({
+  extensions: [myBundle, someOtherExtension],
+  // Equivalent to: [lineNumbers(), keymap.of(defaultKeymap), someOtherExtension]
+});
+```
+
+これにより、再利用可能なバンドルの作成が容易になります。`basicSetup` パッケージ自体も、多くの Extension をまとめた大きな配列に過ぎません。
+
+Extension が競合する場合（たとえば、2 つのキーマップが同じキーをバインドしている場合）、順序が重要です。デフォルトでは、配列内で先に記述された Extension が優先されます。`Prec.highest`、`Prec.high`、`Prec.low`、`Prec.lowest` を使用してこれをオーバーライドできます。
+
+## CodeMirror 5 との比較
+
+| 観点 | CodeMirror 5 | CodeMirror 6 |
+|---|---|---|
+| 状態モデル | ミュータブル、直接更新 | イミュータブル、Transaction ベース |
+| DOM | 単一の textarea または contentEditable | `EditorView` によるカスタムレンダリング |
+| 設定 | `setOption()` を使ったオプションオブジェクト | Extension、Facet、Compartment |
+| 拡張 | イベントリスナー、オーバーレイ、アドオン | Facet、StateField、ViewPlugin |
+| バンドリング | 単一のモノリシックスクリプト | モジュラーパッケージ（`@codemirror/*`） |
+| TypeScript | コミュニティの型定義 | TypeScript で記述、型定義を内蔵 |
+
+モジュラー設計により使用する機能のみをバンドルでき、イミュータブルな状態モデルにより CM5 のイベント駆動型の変更アプローチよりも予測可能に変更を推論できます。

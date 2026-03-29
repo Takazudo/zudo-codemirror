@@ -1,0 +1,374 @@
+---
+title: Complete Vim Editor Setup
+description: Full-featured vim-enabled CodeMirror 6 editor with status display, clipboard sync, custom commands, vimrc, theming, and settings-driven configuration.
+sidebar_position: 3
+---
+
+# Complete Vim Editor Setup
+
+This page shows how to assemble a full-featured vim-mode editor in CodeMirror 6. It combines `@replit/codemirror-vim` with a status indicator, clipboard sync, custom Ex commands, vimrc loading, CSS variable theming, line wrap toggling, and configurable settings. Each section is self-contained so you can adopt pieces individually.
+
+## Vim Mode with Status Indicator
+
+Enable vim mode with the built-in status panel. The status panel displays the current mode (Normal, Insert, Visual), partial command input, and the register being used.
+
+```ts
+import { vim } from "@replit/codemirror-vim";
+
+const vimExtension = vim({ status: true });
+```
+
+Place `vimExtension` before other keybinding extensions so vim's key handling takes priority.
+
+## Clipboard Sync
+
+By default, vim's yank and paste use an internal register that is isolated from the system clipboard. To sync vim's unnamed register (`"`) with the system clipboard, define a custom `"*` and `"+` register handler using the Clipboard API.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+Vim.defineRegister("*", {
+  setText(text: string) {
+    navigator.clipboard.writeText(text);
+  },
+  getText() {
+    // Synchronous getText cannot await clipboard.readText().
+    // This fallback returns empty; paste with Ctrl-V or Cmd-V instead.
+    return "";
+  },
+});
+
+Vim.defineRegister("+", {
+  setText(text: string) {
+    navigator.clipboard.writeText(text);
+  },
+  getText() {
+    return "";
+  },
+});
+```
+
+<Note>
+
+The Clipboard API's `readText()` is asynchronous, but vim's `getText()` is synchronous. There is no clean way to make `p` (vim paste) read from the system clipboard. Yanking copies to the clipboard, but pasting from the system clipboard requires `Ctrl-V` / `Cmd-V` (the browser's native paste). If your application controls the full keyboard environment (for example, Tauri or Electron), you can work around this by intercepting paste events and writing to the register before vim reads it.
+
+</Note>
+
+## Custom :w and :q Commands
+
+Define Ex commands so that `:w` saves the document and `:q` closes the editor or the application window.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+Vim.defineEx("write", "w", (cm) => {
+  const content = cm.state.doc.toString();
+  // Pass to your save handler
+  onSave(content);
+});
+
+Vim.defineEx("quit", "q", () => {
+  // Close the editor pane, or close the window in desktop apps
+  onQuit();
+});
+
+Vim.defineEx("wq", "wq", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+  onQuit();
+});
+```
+
+The second argument to `defineEx` is the short form. `:w`, `:write`, `:q`, `:quit`, and `:wq` all work after this configuration.
+
+## Vimrc Support
+
+`@replit/codemirror-vim` supports loading vimrc-style configuration strings. This is useful for letting users customize their vim settings.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+const vimrc = `
+set number
+set ignorecase
+set smartcase
+imap jj <Esc>
+nmap ; :
+`;
+
+for (const line of vimrc.split("\n")) {
+  const trimmed = line.trim();
+  if (trimmed && !trimmed.startsWith('"')) {
+    Vim.handleEx(trimmed);
+  }
+}
+```
+
+`Vim.handleEx` executes a single Ex command string. By splitting a vimrc into lines and feeding each one, you get basic vimrc compatibility. Not all Vim commands are supported -- the subset depends on what `@replit/codemirror-vim` implements.
+
+## Theme with CSS Variables
+
+Define the editor's visual appearance using CSS variables so that the theme can adapt to light/dark mode or user preferences without rebuilding extensions.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const themeExtension = EditorView.theme({
+  "&": {
+    color: "var(--editor-text)",
+    backgroundColor: "var(--editor-bg)",
+  },
+  ".cm-content": {
+    caretColor: "var(--editor-caret)",
+    fontFamily: "var(--editor-font-family)",
+    fontSize: "var(--editor-font-size)",
+    lineHeight: "var(--editor-line-height)",
+  },
+  ".cm-cursor": {
+    borderLeftColor: "var(--editor-caret)",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "var(--editor-active-line-bg)",
+  },
+  ".cm-gutters": {
+    backgroundColor: "var(--editor-gutter-bg)",
+    color: "var(--editor-gutter-text)",
+    borderRight: "none",
+  },
+  ".cm-activeLineGutter": {
+    backgroundColor: "var(--editor-active-line-bg)",
+  },
+  // Vim status bar
+  ".cm-panels-bottom .cm-panel": {
+    backgroundColor: "var(--editor-status-bg)",
+    color: "var(--editor-status-text)",
+  },
+});
+```
+
+Corresponding CSS variables:
+
+```css
+:root {
+  --editor-bg: #1e1e2e;
+  --editor-text: #cdd6f4;
+  --editor-caret: #f5e0dc;
+  --editor-active-line-bg: rgba(255, 255, 255, 0.05);
+  --editor-gutter-bg: #1e1e2e;
+  --editor-gutter-text: #6c7086;
+  --editor-status-bg: #181825;
+  --editor-status-text: #a6adc8;
+  --editor-font-family: "JetBrains Mono", monospace;
+  --editor-font-size: 14px;
+  --editor-line-height: 1.6;
+}
+```
+
+## Line Wrapping Toggle via :set wrap
+
+Add a custom `:set` handler that supports toggling line wrap. This uses a `Compartment` to dynamically reconfigure the `EditorView.lineWrapping` extension.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { Vim } from "@replit/codemirror-vim";
+
+const wrapCompartment = new Compartment();
+
+// Initial state: wrapping off
+const wrapExtension = wrapCompartment.of([]);
+
+// Define :set wrap and :set nowrap
+Vim.defineOption("wrap", false, "boolean", undefined, {
+  setCallback(_key: string, value: boolean, cm: any) {
+    const view = cm.cm6 as EditorView;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(
+        value ? EditorView.lineWrapping : []
+      ),
+    });
+  },
+});
+```
+
+After this configuration, `:set wrap` enables line wrapping and `:set nowrap` disables it.
+
+## Settings-Driven Configuration
+
+For editors that allow user preferences (font size, font family, line height, padding), use compartments for each configurable property. This allows changing settings at runtime without recreating the editor.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+interface EditorSettings {
+  fontSize: number;
+  fontFamily: string;
+  lineHeight: number;
+  padding: number;
+}
+
+const fontSizeCompartment = new Compartment();
+const fontFamilyCompartment = new Compartment();
+const lineHeightCompartment = new Compartment();
+const paddingCompartment = new Compartment();
+
+function settingsExtensions(settings: EditorSettings) {
+  return [
+    fontSizeCompartment.of(
+      EditorView.theme({
+        ".cm-content": { fontSize: `${settings.fontSize}px` },
+        ".cm-gutters": { fontSize: `${settings.fontSize}px` },
+      })
+    ),
+    fontFamilyCompartment.of(
+      EditorView.theme({
+        ".cm-content": { fontFamily: settings.fontFamily },
+        ".cm-gutters": { fontFamily: settings.fontFamily },
+      })
+    ),
+    lineHeightCompartment.of(
+      EditorView.theme({
+        ".cm-content": { lineHeight: String(settings.lineHeight) },
+      })
+    ),
+    paddingCompartment.of(
+      EditorView.contentAttributes.of({
+        style: `padding: ${settings.padding}px`,
+      })
+    ),
+  ];
+}
+
+function applySettings(view: EditorView, settings: EditorSettings) {
+  view.dispatch({
+    effects: [
+      fontSizeCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { fontSize: `${settings.fontSize}px` },
+          ".cm-gutters": { fontSize: `${settings.fontSize}px` },
+        })
+      ),
+      fontFamilyCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { fontFamily: settings.fontFamily },
+          ".cm-gutters": { fontFamily: settings.fontFamily },
+        })
+      ),
+      lineHeightCompartment.reconfigure(
+        EditorView.theme({
+          ".cm-content": { lineHeight: String(settings.lineHeight) },
+        })
+      ),
+      paddingCompartment.reconfigure(
+        EditorView.contentAttributes.of({
+          style: `padding: ${settings.padding}px`,
+        })
+      ),
+    ],
+  });
+}
+```
+
+## Complete Example
+
+Bringing all the pieces together into a single editor setup:
+
+```ts
+import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentMore,
+  indentLess,
+} from "@codemirror/commands";
+import {
+  markdown,
+  markdownLanguage,
+  insertNewlineContinueMarkup,
+} from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+import { vim, Vim } from "@replit/codemirror-vim";
+
+// --- Configuration ---
+const wrapCompartment = new Compartment();
+
+// --- Vim customization ---
+Vim.defineEx("write", "w", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+});
+
+Vim.defineEx("quit", "q", () => {
+  onQuit();
+});
+
+Vim.defineEx("wq", "wq", (cm) => {
+  const content = cm.state.doc.toString();
+  onSave(content);
+  onQuit();
+});
+
+Vim.defineOption("wrap", false, "boolean", undefined, {
+  setCallback(_key: string, value: boolean, cm: any) {
+    const view = cm.cm6 as EditorView;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(
+        value ? EditorView.lineWrapping : []
+      ),
+    });
+  },
+});
+
+// --- Extensions ---
+const extensions = [
+  vim({ status: true }),
+  history(),
+  lineNumbers(),
+  markdown({ base: markdownLanguage, codeLanguages: languages }),
+  keymap.of([
+    ...defaultKeymap,
+    ...historyKeymap,
+    { key: "Enter", run: insertNewlineContinueMarkup },
+    { key: "Tab", run: indentMore },
+    { key: "Shift-Tab", run: indentLess },
+  ]),
+  wrapCompartment.of([]),
+  EditorView.contentAttributes.of({
+    autocorrect: "off",
+    autocomplete: "off",
+    autocapitalize: "off",
+    spellcheck: "false",
+    writingsuggestions: "false",
+  }),
+  EditorView.theme({
+    "&": {
+      color: "var(--editor-text)",
+      backgroundColor: "var(--editor-bg)",
+    },
+    ".cm-content": {
+      caretColor: "var(--editor-caret)",
+      fontFamily: "var(--editor-font-family)",
+      fontSize: "var(--editor-font-size)",
+      lineHeight: "var(--editor-line-height)",
+    },
+    ".cm-cursor": {
+      borderLeftColor: "var(--editor-caret)",
+    },
+    ".cm-gutters": {
+      backgroundColor: "var(--editor-gutter-bg)",
+      color: "var(--editor-gutter-text)",
+      borderRight: "none",
+    },
+  }),
+];
+
+// --- Create editor ---
+const state = EditorState.create({ doc: "", extensions });
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor")!,
+});
+```

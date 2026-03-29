@@ -1,0 +1,255 @@
+---
+title: インストール
+description: CodeMirror 6 パッケージのインストールと基本的なエディタのセットアップ方法。
+sidebar_position: 2
+---
+
+## メタパッケージによるクイックスタート
+
+最も手軽に始めるには、`codemirror` メタパッケージと、編集したい言語の言語パッケージをインストールします。
+
+<Tabs>
+
+<TabItem label="npm">
+
+```bash
+npm install codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```bash
+pnpm add codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```bash
+yarn add codemirror @codemirror/lang-javascript
+```
+
+</TabItem>
+
+</Tabs>
+
+これにより、`EditorView`、`EditorState`、`basicSetup`、およびコアの依存パッケージが利用可能になります。
+
+## 必須パッケージ
+
+バンドルサイズをより細かく制御するためにパッケージを個別にインストールしたい場合、動作するエディタに必要な最小パッケージは以下の通りです:
+
+```bash
+npm install @codemirror/state @codemirror/view @codemirror/commands
+```
+
+シンタックスハイライトや一般的な機能を含むより完全なセットアップには、以下を追加します:
+
+```bash
+npm install @codemirror/language @codemirror/search @codemirror/autocomplete @codemirror/lint
+```
+
+### パッケージの役割
+
+- `@codemirror/state` - EditorState、Transaction、StateField、Facet
+- `@codemirror/view` - EditorView、Decoration、キーマップ、行番号、DOM 処理
+- `@codemirror/commands` - 標準的な編集コマンド（defaultKeymap、undo、redo、インデント）
+- `@codemirror/language` - シンタックスハイライト、インデント、コード折りたたみの基盤
+- `@codemirror/search` - 検索/置換パネルとコマンド
+- `@codemirror/autocomplete` - オートコンプリートのドロップダウンとソース
+- `@codemirror/lint` - Lint と診断の表示
+
+## 言語パッケージ
+
+サポートしたい各言語の言語パッケージをインストールします。それぞれがシンタックスハイライト、インデントルール、言語固有の機能を提供します。
+
+```bash
+# JavaScript / TypeScript
+npm install @codemirror/lang-javascript
+
+# HTML
+npm install @codemirror/lang-html
+
+# CSS
+npm install @codemirror/lang-css
+
+# JSON
+npm install @codemirror/lang-json
+
+# Python
+npm install @codemirror/lang-python
+
+# Markdown
+npm install @codemirror/lang-markdown
+```
+
+## Markdown エディタのセットアップ
+
+Markdown エディタには、Markdown 言語パッケージとコードブロックのハイライト用の依存パッケージをインストールします:
+
+```bash
+npm install codemirror @codemirror/lang-markdown @codemirror/language-data
+```
+
+`@codemirror/language-data` は、サポートされているすべての言語の言語定義を提供します。Markdown 言語パッケージはこれを使用して、フェンスドコードブロックのシンタックスハイライトを行います。
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const view = new EditorView({
+  doc: "# Hello Markdown\n\nType here...",
+  extensions: [
+    basicSetup,
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: languages,
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+## Vim モード
+
+Vim キーバインディングは、Replit がメンテナンスする `@replit/codemirror-vim` パッケージで提供されます:
+
+```bash
+npm install @replit/codemirror-vim
+```
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { vim } from "@replit/codemirror-vim";
+
+const view = new EditorView({
+  doc: "// Press Escape, then :q to quit\n",
+  extensions: [
+    vim(),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+<Note>
+
+`vim()` Extension は、extensions 配列で `basicSetup` より前に配置する必要があります。これにより、vim キーバインディングがデフォルトキーマップより優先されます。
+
+</Note>
+
+## TypeScript
+
+すべての CodeMirror 6 パッケージには TypeScript の型定義が含まれています。別途 `@types/` パッケージをインストールする必要はありません。TypeScript 対応のエディタでは、型チェックとオートコンプリートがそのまま動作します。
+
+## 最小限のエディタの例
+
+以下は、標準的な機能を備えた JavaScript エディタを作成する完全な最小限の例です:
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+
+const view = new EditorView({
+  doc: `function greet(name) {
+  console.log("Hello, " + name + "!");
+}
+
+greet("world");
+`,
+  extensions: [basicSetup, javascript()],
+  parent: document.getElementById("editor"),
+});
+```
+
+これには npm の import を解決するためのバンドラー（Vite、webpack、esbuild、Rollup など）が必要です。エディタは `id="editor"` を持つ DOM 要素にレンダリングされます。
+
+以下のライブエディタを試してみてください。`basicSetup` と JavaScript 言語サポートを使った同じコードが動作しています:
+
+<HtmlPreview
+  title="Minimal JavaScript Editor"
+  height={280}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: 'function greet(name) {\\n  console.log("Hello, " + name + "!");\\n}\\n\\ngreet("world");\\n',
+      extensions: [CM.basicSetup, CM.javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const view = new EditorView({
+      doc: 'function greet(name) {\\n  console.log("Hello, " + name + "!");\\n}\\n\\ngreet("world");\\n',
+      extensions: [basicSetup, javascript()],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+### HTML ページのセットアップ
+
+ホストとなる HTML ページには、コンテナ要素とバンドルされたスクリプトが必要です:
+
+```html
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>CodeMirror Editor</title>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script type="module" src="./editor.js"></script>
+  </body>
+</html>
+```
+
+### コンテナのスタイリング
+
+CodeMirror はコンテナ要素内に独自の UI をレンダリングします。CSS でエディタの高さを制限し、ボーダーを追加できます:
+
+```css
+#editor {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+/* Fix the editor to a specific height with scrolling */
+.cm-editor {
+  height: 300px;
+}
+
+/* Or let it grow with content (no fixed height) */
+.cm-editor {
+  max-height: 500px;
+}
+```
+
+`.cm-editor` に高さを設定しない場合、エディタはコンテンツに合わせて拡張されます。
+
+## バンドラーの設定
+
+CodeMirror パッケージは ES モジュールとして配布されています。モダンなバンドラーであれば特別な設定なしで処理できます。
+
+### Vite
+
+追加の設定は不要です。Vite は ES モジュールをネイティブに解決します。
+
+### webpack
+
+webpack の設定で `node_modules` がモジュール解決に含まれていることを確認してください（デフォルトで含まれています）。特別なローダーは不要です。
+
+### esbuild
+
+```bash
+esbuild editor.ts --bundle --outfile=editor.js --format=esm
+```
+
+## 次のステップ
+
+- [クイックリファレンス](./quick-reference) - 一般的なパターンとよく使われる操作

@@ -1,0 +1,176 @@
+---
+title: Vimrc Support
+description: Apply vimrc-style configuration to @replit/codemirror-vim using Vim.handleEx().
+sidebar_position: 6
+---
+
+# Vimrc Support
+
+`@replit/codemirror-vim` can execute vimrc-style commands at runtime using the `Vim.handleEx()` method. This allows users to provide a block of vim configuration text, which your application parses and applies line by line.
+
+## Vim.handleEx()
+
+`Vim.handleEx()` executes a single Ex command string as if the user had typed it in command-line mode.
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+const cm = getCM(view)!;
+Vim.handleEx(cm, "set number");
+Vim.handleEx(cm, "imap jk <Esc>");
+```
+
+The first argument is the CodeMirror adapter object, obtained via `getCM(view)`. The second argument is the raw Ex command string (without the leading `:`).
+
+## Getting the CodeMirror Adapter
+
+`getCM()` takes an `EditorView` and returns the internal CodeMirror adapter that the vim layer operates on.
+
+```ts
+import { getCM } from "@replit/codemirror-vim";
+
+const cm = getCM(view);
+```
+
+<Warning>
+
+`getCM()` may return `undefined` if the vim extension is not active on the given view. Check the return value before passing it to `Vim.handleEx()`.
+
+</Warning>
+
+## Parsing a Vimrc String
+
+A vimrc file consists of one command per line. Blank lines and lines starting with `"` (double quote) are comments.
+
+```ts
+function parseVimrc(content: string): string[] {
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('"'));
+}
+```
+
+## Applying Vimrc Commands
+
+Iterate over the parsed commands and execute each one. Wrap in try/catch because not all vimrc commands may be supported.
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+function applyVimrc(view: EditorView, vimrcContent: string) {
+  const cm = getCM(view);
+  if (!cm) return;
+
+  for (const cmd of parseVimrc(vimrcContent)) {
+    try {
+      Vim.handleEx(cm, cmd);
+    } catch (e) {
+      console.warn("vimrc command failed:", cmd, e);
+    }
+  }
+}
+```
+
+## Example Vimrc Content
+
+A typical vimrc string that a user might provide:
+
+```vim
+" Basic settings
+set number
+
+" Key mappings
+imap jk <Esc>
+nmap H ^
+nmap L $
+nnoremap j gj
+nnoremap k gk
+
+" Leader mappings
+map <Space> <Leader>
+nmap <Leader>w :w<CR>
+nmap <Leader>q :q<CR>
+```
+
+## Common Vimrc Settings
+
+### Line Numbers
+
+```vim
+set number
+set nonumber
+```
+
+These work out of the box with `@replit/codemirror-vim`.
+
+### Line Wrapping
+
+```vim
+set wrap
+set nowrap
+```
+
+<Note>
+
+`set wrap` and `set nowrap` require a custom option definition with `Vim.defineOption()`. See the [Vim Options](/docs/vim-mode/options/) page for the implementation.
+
+</Note>
+
+### Insert Mode Escape Mapping
+
+```vim
+imap jk <Esc>
+```
+
+### Navigation with Display Lines
+
+Map `j`/`k` to move by display lines (wrapped lines) instead of buffer lines.
+
+```vim
+nnoremap j gj
+nnoremap k gk
+```
+
+### Leader Key Configuration
+
+```vim
+map <Space> <Leader>
+nmap <Leader>w :w<CR>
+nmap <Leader>q :q<CR>
+nmap <Leader>h :nohlsearch<CR>
+```
+
+## Timing Considerations
+
+Apply vimrc commands after the EditorView is created and the vim extension is initialized. If you apply commands too early, `getCM(view)` may return `undefined`.
+
+```ts
+const view = new EditorView({
+  extensions: [vim(), basicSetup],
+  parent: document.getElementById("editor")!,
+});
+
+// Apply vimrc after view creation
+applyVimrc(view, userVimrcContent);
+```
+
+## Loading Vimrc from User Input
+
+A practical pattern is to let users paste or upload their vimrc, store it, and reapply it when the editor initializes.
+
+```ts
+function loadVimrc(): string | null {
+  return localStorage.getItem("user-vimrc");
+}
+
+function saveVimrc(content: string) {
+  localStorage.setItem("user-vimrc", content);
+}
+
+// On editor init
+const vimrc = loadVimrc();
+if (vimrc) {
+  applyVimrc(view, vimrc);
+}
+```

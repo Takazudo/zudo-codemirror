@@ -1,0 +1,216 @@
+---
+title: React Integration
+description: "Patterns for embedding CodeMirror 6 in React applications: lifecycle management, change handling, and external state synchronization."
+sidebar_position: 1
+---
+
+# React Integration
+
+CodeMirror 6 is a vanilla JavaScript library. It manages its own DOM and state internally, so integrating it with React requires bridging two lifecycle models. The patterns below are extracted from production React applications.
+
+## Editor Container with useRef
+
+The editor needs a DOM element to mount into. Use `useRef` to hold a reference to a container `<div>`, and pass it to `EditorView` as the `parent` option.
+
+```tsx
+const containerRef = useRef<HTMLDivElement>(null);
+```
+
+Render the container element in JSX:
+
+```tsx
+<div ref={containerRef} />
+```
+
+## Editor Lifecycle with useEffect
+
+Create the `EditorView` inside a `useEffect` that runs once on mount. Return a cleanup function that calls `view.destroy()` to remove the editor from the DOM and release its resources.
+
+```tsx
+useEffect(() => {
+  if (!containerRef.current) return;
+
+  const state = EditorState.create({
+    doc: initialContent,
+    extensions: [/* ... */],
+  });
+  const view = new EditorView({ state, parent: containerRef.current });
+
+  return () => {
+    view.destroy();
+  };
+}, []);
+```
+
+The empty dependency array is intentional. The editor should be created exactly once. Recreating it discards cursor position, undo history, scroll position, and any unsaved state the user is working with.
+
+## Handling Content Changes
+
+Use `EditorView.updateListener` to listen for document changes inside the editor. Call your `onChange` handler whenever the document changes.
+
+```tsx
+EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    onChange(update.state.doc.toString());
+  }
+})
+```
+
+### The Callback Ref Pattern
+
+There is a subtle problem. If `onChange` is passed as a prop and changes identity on each render (which is common with inline arrow functions), you do not want to recreate the editor every time. The solution is a mutable ref that always points to the latest callback.
+
+```tsx
+const onChangeRef = useRef(onChange);
+onChangeRef.current = onChange;
+```
+
+Inside the `updateListener`, read from the ref instead of closing over the prop directly:
+
+```tsx
+EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    onChangeRef.current(update.state.doc.toString());
+  }
+})
+```
+
+This way the listener always calls the latest version of `onChange` without requiring the editor to be recreated.
+
+## Syncing External Content Changes
+
+When the parent component updates the `content` prop (for example, loading a different file), you need to push that new content into the existing editor. A second `useEffect` watches the `content` prop and dispatches a replace transaction only when the editor's current document differs from the incoming value.
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+  }
+}, [content]);
+```
+
+The equality check (`currentDoc !== content`) prevents an infinite loop. Without it, the `onChange` handler fires when the editor dispatches the change, which updates the parent state, which triggers this effect again.
+
+## Complete useCodeMirrorEditor Hook
+
+Here is a full custom hook that combines all of the patterns above. It creates a markdown editor with history support and exposes an `insertAtCursor` utility for toolbar buttons or other external controls.
+
+```tsx
+import { useRef, useEffect, useCallback } from "react";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+interface Props {
+  content: string;
+  onChange: (value: string) => void;
+}
+
+function useCodeMirrorEditor({ content, onChange }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const extensions = [
+      history(),
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChangeRef.current(update.state.doc.toString());
+        }
+      }),
+    ];
+
+    const state = EditorState.create({ doc: content, extensions });
+    const view = new EditorView({ state, parent: containerRef.current });
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []); // Only create once
+
+  // Sync external content changes
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const currentDoc = view.state.doc.toString();
+    if (currentDoc !== content) {
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: content },
+      });
+    }
+  }, [content]);
+
+  const insertAtCursor = useCallback((text: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const pos = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + text.length },
+    });
+  }, []);
+
+  return { containerRef, insertAtCursor };
+}
+```
+
+Usage in a component:
+
+```tsx
+function MarkdownEditor() {
+  const [content, setContent] = useState("");
+  const { containerRef, insertAtCursor } = useCodeMirrorEditor({
+    content,
+    onChange: setContent,
+  });
+
+  return (
+    <div>
+      <button onClick={() => insertAtCursor("**bold**")}>Bold</button>
+      <div ref={containerRef} />
+    </div>
+  );
+}
+```
+
+<Warning>
+
+Do not include the editor view or settings objects in the useEffect dependency array unless you truly want to recreate the editor. Recreating the editor loses cursor position, undo history, and scroll position.
+
+</Warning>
+
+## Accessing the EditorView from Outside
+
+The `viewRef` pattern gives you imperative access to the editor from anywhere in the component. This is useful for focus management, programmatic scrolling, or reading the current selection.
+
+```tsx
+// Focus the editor
+viewRef.current?.focus();
+
+// Read current selection
+const selection = viewRef.current?.state.selection.main;
+
+// Scroll to a position
+viewRef.current?.dispatch({
+  effects: EditorView.scrollIntoView(0),
+});
+```
+
+## Notes on StrictMode
+
+In React 18's StrictMode, `useEffect` runs twice in development. This means the editor is created, destroyed, and created again on mount. This is expected behavior and does not cause issues in production. If the double mount is distracting during development, the cleanup function handles it correctly since `view.destroy()` is idempotent.

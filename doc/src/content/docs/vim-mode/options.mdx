@@ -1,0 +1,153 @@
+---
+title: Vim Options
+description: Define and manage vim options like :set wrap and :set number in @replit/codemirror-vim.
+sidebar_position: 7
+---
+
+# Vim Options
+
+`@replit/codemirror-vim` supports vim-style `:set` commands through `Vim.defineOption()`. Some options work out of the box, while others need custom definitions to bridge vim settings with CodeMirror configuration.
+
+## Vim.defineOption()
+
+Registers a custom vim option that responds to `:set {name}` and `:set no{name}`.
+
+```ts
+Vim.defineOption(
+  name: string,
+  defaultValue: any,
+  type: string,
+  aliases?: string[],
+  callback?: (value: any, cm?: any) => void
+): void
+```
+
+- `name` -- the option name used in `:set` commands
+- `defaultValue` -- the initial value
+- `type` -- the value type (`"boolean"`, `"number"`, `"string"`)
+- `aliases` -- alternative names for the option (e.g., `["nu"]` for `"number"`)
+- `callback` -- called when the option value changes. This is where you apply the change to the CodeMirror editor.
+
+## Built-in Options
+
+These options are recognized by `@replit/codemirror-vim` without additional configuration.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `number` | boolean | show line numbers |
+| `relativenumber` | boolean | show relative line numbers |
+
+```vim
+:set number
+:set nonumber
+:set relativenumber
+:set norelativenumber
+```
+
+## Implementing :set wrap / :set nowrap
+
+Line wrapping requires a custom option because it maps to a CodeMirror extension (`EditorView.lineWrapping`) that must be toggled via a `Compartment`.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorView } from "@codemirror/view";
+import { Compartment } from "@codemirror/state";
+
+const wrapCompartment = new Compartment();
+```
+
+Include the compartment in the extensions array when creating the view.
+
+```ts
+const view = new EditorView({
+  extensions: [
+    vim(),
+    wrapCompartment.of(EditorView.lineWrapping),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor")!,
+});
+```
+
+Then register the option so that `:set wrap` and `:set nowrap` reconfigure the compartment.
+
+```ts
+Vim.defineOption("wrap", true, "boolean", [], (value: boolean) => {
+  view.dispatch({
+    effects: wrapCompartment.reconfigure(
+      value ? EditorView.lineWrapping : []
+    ),
+  });
+});
+```
+
+After this, `:set nowrap` disables line wrapping and `:set wrap` re-enables it.
+
+## Implementing :set tabstop
+
+Map the `tabstop` option to CodeMirror's `EditorState.tabSize`.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorState } from "@codemirror/state";
+import { Compartment } from "@codemirror/state";
+
+const tabSizeCompartment = new Compartment();
+
+// In extensions array:
+// tabSizeCompartment.of(EditorState.tabSize.of(4))
+
+Vim.defineOption("tabstop", 4, "number", ["ts"], (value: number) => {
+  const size = Math.max(1, Math.min(value, 16));
+  view.dispatch({
+    effects: tabSizeCompartment.reconfigure(
+      EditorState.tabSize.of(size)
+    ),
+  });
+});
+```
+
+This enables `:set tabstop=2` or `:set ts=8` from the vim command line.
+
+## Implementing Custom Boolean Options
+
+The pattern for any boolean toggle option follows the same structure: a Compartment holding an extension, and a `Vim.defineOption()` callback that reconfigures it.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+// Example: a custom "cursorline" option using a highlight extension
+const cursorLineCompartment = new Compartment();
+
+// In extensions array:
+// cursorLineCompartment.of(highlightActiveLine())
+
+Vim.defineOption("cursorline", true, "boolean", ["cul"], (value: boolean) => {
+  view.dispatch({
+    effects: cursorLineCompartment.reconfigure(
+      value ? highlightActiveLine() : []
+    ),
+  });
+});
+```
+
+## Querying Option Values
+
+`:set {name}?` prints the current value of a boolean option. For boolean options, `:set {name}` turns it on and `:set no{name}` turns it off.
+
+```vim
+:set number?       " shows whether line numbers are enabled
+:set tabstop?      " shows the current tab size
+```
+
+## Compartment Pattern Summary
+
+The general pattern for bridging vim options with CodeMirror:
+
+- Create a `Compartment` for the extension you want to toggle or configure
+- Include `compartment.of(defaultExtension)` in the initial extensions array
+- Call `Vim.defineOption()` with a callback that dispatches a `compartment.reconfigure()` effect
+
+This approach keeps vim option handling clean and integrates with CodeMirror's extension system without side effects.

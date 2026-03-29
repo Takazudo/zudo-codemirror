@@ -1,0 +1,120 @@
+---
+title: Vim Mode Overview
+description: Set up and configure @replit/codemirror-vim for CodeMirror 6.
+sidebar_position: 1
+---
+
+# Vim Mode Overview
+
+`@replit/codemirror-vim` is the primary vim emulation package for CodeMirror 6. Originally developed by Replit, it provides a comprehensive vim experience inside any CodeMirror editor, including modal editing, motions, operators, text objects, registers, macros, and Ex commands.
+
+## Installation
+
+```bash
+pnpm add @replit/codemirror-vim
+```
+
+## Basic Setup
+
+Add `vim()` to the extensions array when creating an editor.
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { vim } from "@replit/codemirror-vim";
+
+const view = new EditorView({
+  extensions: [
+    vim(),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor")!,
+});
+```
+
+<Warning>
+
+Place `vim()` before `basicSetup` in the extensions array. The vim extension needs higher precedence so that its key handling takes priority over default keybindings.
+
+</Warning>
+
+Try the vim-mode editor below. Press `Escape` for Normal mode, `i` for Insert mode, use `hjkl` to navigate, `:` for Ex commands. The status bar at the bottom shows the current mode.
+
+<HtmlPreview
+  title="Vim Mode Editor"
+  height={320}
+  html={`<div id="editor"></div>`}
+  css={`
+    .cm-vim-panel { font-family: ui-monospace, monospace; font-size: 13px; padding: 2px 8px; }
+    .cm-editor { height: 270px; }
+  `}
+  js={`
+    const view = new CM.EditorView({
+      doc: "# Welcome to Vim Mode\\n\\nPress Escape for Normal mode, i for Insert mode.\\nUse h/j/k/l to navigate in Normal mode.\\n\\nTry these commands:\\n  dd    - delete a line\\n  yy    - yank (copy) a line\\n  p     - paste below\\n  /text - search for 'text'\\n  :set number - show line numbers\\n  u     - undo\\n",
+      extensions: [
+        CM.vim({ status: true }),
+        CM.basicSetup,
+        CM.markdown(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { vim } from "@replit/codemirror-vim";
+    import { markdown } from "@codemirror/lang-markdown";
+
+    const view = new EditorView({
+      doc: "# Welcome to Vim Mode\\n\\nPress Escape for Normal mode...",
+      extensions: [
+        vim({ status: true }),
+        basicSetup,
+        markdown(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## vim() Function Options
+
+The `vim()` function accepts an optional configuration object.
+
+```ts
+vim({
+  status: true, // show a vim status indicator (mode display)
+})
+```
+
+- `status` -- when `true`, the extension includes a panel that displays the current vim mode (Normal, Insert, Visual, etc.) and partial command input
+
+## How It Works
+
+The vim extension overrides CodeMirror's default key handling. When a key is pressed:
+
+- The vim layer intercepts the event before CodeMirror's built-in keymap processing
+- The key is fed into an internal vim command parser that tracks partial commands, counts, and registers
+- Depending on the current mode, the parser either executes a command, transitions between modes, or passes the key through to CodeMirror
+
+The extension maintains its own internal state for mode tracking, registers, marks, macros, and the command-line buffer. It translates vim operations into CodeMirror transactions (selections, replacements, and dispatches) to apply changes to the document.
+
+## Supported Modes
+
+`@replit/codemirror-vim` supports the following vim modes:
+
+- **Normal** -- the default mode for navigation and issuing commands
+- **Insert** -- text input mode, entered via `i`, `a`, `o`, and related commands
+- **Visual** -- character-wise visual selection, entered via `v`
+- **Visual Line** -- line-wise visual selection, entered via `V`
+- **Visual Block** -- block (column) visual selection, entered via `Ctrl-v`
+- **Replace** -- overwrite mode, entered via `R`
+- **Command-line (Ex)** -- for Ex commands, entered via `:`
+
+## Accessing the Vim Object
+
+Many customization APIs live on the `Vim` object, which is a separate import.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+This object provides methods for defining custom Ex commands, key mappings, options, and register manipulation. The following pages in this section cover each of these in detail.

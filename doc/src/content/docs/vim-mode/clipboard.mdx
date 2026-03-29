@@ -1,0 +1,212 @@
+---
+title: Clipboard Integration
+description: Sync vim registers with the system clipboard in @replit/codemirror-vim.
+sidebar_position: 5
+---
+
+# Clipboard Integration
+
+By default, vim registers in `@replit/codemirror-vim` are internal -- yank and paste operations do not interact with the system clipboard. This page covers how to bridge that gap.
+
+## The Challenge
+
+In a terminal vim, the `"+` and `"*` registers connect to the system clipboard and selection buffer. In a browser-based editor, these registers are just in-memory objects with no system integration. Yanking text with `"+y` stores it internally but does not copy to the OS clipboard, and `"+p` pastes from the internal register, not from whatever the user copied elsewhere.
+
+## Register Controller API
+
+The `Vim` object exposes the register controller, which manages all named registers.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+
+const controller = Vim.getRegisterController();
+const registers = controller.registers;
+```
+
+Each register is an object with methods for getting and setting text. You can replace any register with a custom implementation that syncs with the system clipboard.
+
+## Creating a Clipboard Register
+
+The following implementation creates a register object that writes to `navigator.clipboard` on every yank and stores text locally for paste operations.
+
+```ts
+function createClipboardRegister() {
+  const register = {
+    keyBuffer: [] as string[],
+    insertModeChanges: [] as never[],
+    searchQueries: [] as string[],
+    linewise: false,
+    blockwise: false,
+
+    setText(text?: string, linewise?: boolean, blockwise?: boolean) {
+      register.keyBuffer = text ? [text] : [];
+      register.linewise = !!linewise;
+      register.blockwise = !!blockwise;
+      if (text) {
+        navigator.clipboard.writeText(text).catch(console.warn);
+      }
+    },
+
+    pushText(text: string, linewise?: boolean) {
+      register.keyBuffer.push(text);
+      register.linewise = !!linewise;
+      navigator.clipboard
+        .writeText(register.keyBuffer.join("\n"))
+        .catch(console.warn);
+    },
+
+    pushInsertModeChanges(_changes: never) {},
+
+    pushSearchQuery(_query: string) {},
+
+    clear() {
+      register.keyBuffer = [];
+      register.linewise = false;
+      register.blockwise = false;
+    },
+
+    toString() {
+      return register.keyBuffer.join("\n");
+    },
+  };
+
+  return register;
+}
+```
+
+## Replacing the Clipboard Registers
+
+Replace the `*` and `+` registers with the clipboard-aware implementation.
+
+```ts
+const controller = Vim.getRegisterController();
+const registers = controller.registers;
+const clipboardRegister = createClipboardRegister();
+
+registers["*"] = clipboardRegister;
+registers["+"] = clipboardRegister;
+```
+
+After this, `"+y` and `"*y` will copy to the system clipboard, and `"+p` / `"*p` will paste from the internal buffer (which stays in sync on yank).
+
+## Clipboard=Unnamedplus Behavior
+
+In vim, `set clipboard=unnamedplus` makes the default (unnamed) register alias the `+` register. Every yank and delete goes to the system clipboard without needing a register prefix.
+
+To replicate this, also replace the unnamed register (`"`).
+
+```ts
+registers['"'] = clipboardRegister;
+controller.unnamedRegister = clipboardRegister;
+```
+
+With this in place, plain `yy` copies to the system clipboard and `p` pastes whatever was last yanked.
+
+## Syncing Clipboard on Focus
+
+One limitation of the approach above is that text copied outside the editor (e.g., from another application) is not automatically available for `p`. The internal register only knows about text that was yanked inside the editor.
+
+To handle external clipboard content, read from `navigator.clipboard` when the editor gains focus.
+
+```ts
+view.dom.addEventListener("focus", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      clipboardRegister.keyBuffer = [text];
+      clipboardRegister.linewise = false;
+      clipboardRegister.blockwise = false;
+    }
+  } catch {
+    // clipboard read may fail if permission is denied
+  }
+});
+```
+
+<Warning>
+
+`navigator.clipboard.readText()` requires the page to have clipboard-read permission. In some browsers, this is granted automatically when the document is focused. In others, the user may see a permission prompt. If permission is denied, the catch block silently handles the error.
+
+</Warning>
+
+## Complete Implementation
+
+Putting it all together.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+import { EditorView } from "@codemirror/view";
+
+function createClipboardRegister() {
+  const register = {
+    keyBuffer: [] as string[],
+    insertModeChanges: [] as never[],
+    searchQueries: [] as string[],
+    linewise: false,
+    blockwise: false,
+
+    setText(text?: string, linewise?: boolean, blockwise?: boolean) {
+      register.keyBuffer = text ? [text] : [];
+      register.linewise = !!linewise;
+      register.blockwise = !!blockwise;
+      if (text) {
+        navigator.clipboard.writeText(text).catch(console.warn);
+      }
+    },
+
+    pushText(text: string, linewise?: boolean) {
+      register.keyBuffer.push(text);
+      register.linewise = !!linewise;
+      navigator.clipboard
+        .writeText(register.keyBuffer.join("\n"))
+        .catch(console.warn);
+    },
+
+    pushInsertModeChanges(_changes: never) {},
+
+    pushSearchQuery(_query: string) {},
+
+    clear() {
+      register.keyBuffer = [];
+      register.linewise = false;
+      register.blockwise = false;
+    },
+
+    toString() {
+      return register.keyBuffer.join("\n");
+    },
+  };
+
+  return register;
+}
+
+function setupClipboardIntegration(view: EditorView) {
+  const controller = Vim.getRegisterController();
+  const registers = controller.registers;
+  const clipboardRegister = createClipboardRegister();
+
+  // Replace system clipboard registers
+  registers["*"] = clipboardRegister;
+  registers["+"] = clipboardRegister;
+
+  // Make unnamed register use clipboard (clipboard=unnamedplus)
+  registers['"'] = clipboardRegister;
+  controller.unnamedRegister = clipboardRegister;
+
+  // Sync external clipboard on focus
+  view.dom.addEventListener("focus", async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        clipboardRegister.keyBuffer = [text];
+        clipboardRegister.linewise = false;
+        clipboardRegister.blockwise = false;
+      }
+    } catch {
+      // clipboard-read permission denied
+    }
+  });
+}
+```
+
+Call `setupClipboardIntegration(view)` after creating the EditorView.

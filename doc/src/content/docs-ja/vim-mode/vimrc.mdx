@@ -1,0 +1,176 @@
+---
+title: vimrc サポート
+description: Vim.handleEx() を使って @replit/codemirror-vim に vimrc スタイルの設定を適用する方法。
+sidebar_position: 6
+---
+
+# vimrc サポート
+
+`@replit/codemirror-vim` は `Vim.handleEx()` メソッドを使って、実行時に vimrc スタイルのコマンドを実行できます。これにより、ユーザーが提供する Vim 設定テキストをアプリケーションで1行ずつパースして適用できます。
+
+## Vim.handleEx()
+
+`Vim.handleEx()` は、ユーザーがコマンドラインモードで入力したかのように、単一の Ex コマンド文字列を実行します。
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+const cm = getCM(view)!;
+Vim.handleEx(cm, "set number");
+Vim.handleEx(cm, "imap jk <Esc>");
+```
+
+第1引数は `getCM(view)` で取得できる CodeMirror アダプターオブジェクトです。第2引数は生の Ex コマンド文字列（先頭の `:` なし）です。
+
+## CodeMirror アダプターの取得
+
+`getCM()` は EditorView を受け取り、Vim レイヤーが操作する内部の CodeMirror アダプターを返します。
+
+```ts
+import { getCM } from "@replit/codemirror-vim";
+
+const cm = getCM(view);
+```
+
+<Warning>
+
+`getCM()` は、指定された view で Vim Extension がアクティブでない場合、`undefined` を返すことがあります。`Vim.handleEx()` に渡す前に戻り値を確認してください。
+
+</Warning>
+
+## vimrc 文字列のパース
+
+vimrc ファイルは1行に1コマンドで構成されます。空行と `"`（ダブルクォート）で始まる行はコメントです。
+
+```ts
+function parseVimrc(content: string): string[] {
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('"'));
+}
+```
+
+## vimrc コマンドの適用
+
+パースされたコマンドを順に実行します。すべての vimrc コマンドがサポートされているわけではないため、try/catch でラップします。
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+function applyVimrc(view: EditorView, vimrcContent: string) {
+  const cm = getCM(view);
+  if (!cm) return;
+
+  for (const cmd of parseVimrc(vimrcContent)) {
+    try {
+      Vim.handleEx(cm, cmd);
+    } catch (e) {
+      console.warn("vimrc command failed:", cmd, e);
+    }
+  }
+}
+```
+
+## vimrc の内容の例
+
+ユーザーが提供する典型的な vimrc 文字列です。
+
+```vim
+" Basic settings
+set number
+
+" Key mappings
+imap jk <Esc>
+nmap H ^
+nmap L $
+nnoremap j gj
+nnoremap k gk
+
+" Leader mappings
+map <Space> <Leader>
+nmap <Leader>w :w<CR>
+nmap <Leader>q :q<CR>
+```
+
+## よく使われる vimrc 設定
+
+### 行番号
+
+```vim
+set number
+set nonumber
+```
+
+これらは `@replit/codemirror-vim` でそのまま動作します。
+
+### 行の折り返し
+
+```vim
+set wrap
+set nowrap
+```
+
+<Note>
+
+`set wrap` と `set nowrap` は `Vim.defineOption()` によるカスタムオプション定義が必要です。実装方法は [Vim オプション](/docs-ja/vim-mode/options/)のページを参照してください。
+
+</Note>
+
+### Insert モードのエスケープマッピング
+
+```vim
+imap jk <Esc>
+```
+
+### 表示行でのナビゲーション
+
+`j`/`k` をバッファ行ではなく表示行（折り返された行）での移動にマッピングします。
+
+```vim
+nnoremap j gj
+nnoremap k gk
+```
+
+### リーダーキーの設定
+
+```vim
+map <Space> <Leader>
+nmap <Leader>w :w<CR>
+nmap <Leader>q :q<CR>
+nmap <Leader>h :nohlsearch<CR>
+```
+
+## タイミングに関する注意
+
+vimrc コマンドは、EditorView が作成され Vim Extension が初期化された後に適用してください。早すぎるタイミングで適用すると、`getCM(view)` が `undefined` を返す場合があります。
+
+```ts
+const view = new EditorView({
+  extensions: [vim(), basicSetup],
+  parent: document.getElementById("editor")!,
+});
+
+// Apply vimrc after view creation
+applyVimrc(view, userVimrcContent);
+```
+
+## ユーザー入力からの vimrc 読み込み
+
+実用的なパターンとして、ユーザーに vimrc をペーストまたはアップロードしてもらい、保存し、エディター初期化時に再適用する方法があります。
+
+```ts
+function loadVimrc(): string | null {
+  return localStorage.getItem("user-vimrc");
+}
+
+function saveVimrc(content: string) {
+  localStorage.setItem("user-vimrc", content);
+}
+
+// On editor init
+const vimrc = loadVimrc();
+if (vimrc) {
+  applyVimrc(view, vimrc);
+}
+```

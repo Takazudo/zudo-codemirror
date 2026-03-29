@@ -1,0 +1,420 @@
+---
+title: Quick Reference
+description: Common CodeMirror 6 patterns - imports, editor setup, content manipulation, and event handling.
+sidebar_position: 3
+---
+
+## Common Import Patterns
+
+```ts
+// Meta-package (includes basicSetup, EditorView, EditorState)
+import { EditorView, basicSetup } from "codemirror";
+
+// Core state
+import { EditorState, StateField, StateEffect, Facet } from "@codemirror/state";
+
+// Core view
+import { EditorView, keymap, lineNumbers, Decoration, ViewPlugin } from "@codemirror/view";
+
+// Commands and keymaps
+import { defaultKeymap, historyKeymap, history, undo, redo } from "@codemirror/commands";
+
+// Language support
+import { javascript } from "@codemirror/lang-javascript";
+import { markdown } from "@codemirror/lang-markdown";
+import { html } from "@codemirror/lang-html";
+import { css } from "@codemirror/lang-css";
+import { json } from "@codemirror/lang-json";
+import { python } from "@codemirror/lang-python";
+
+// Search
+import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
+
+// Autocomplete
+import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+
+// Linting
+import { linter, lintKeymap } from "@codemirror/lint";
+
+// Vim mode
+import { vim } from "@replit/codemirror-vim";
+```
+
+## Minimal Editor Setup
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+
+const view = new EditorView({
+  doc: "// your code here\n",
+  extensions: [basicSetup, javascript()],
+  parent: document.getElementById("editor"),
+});
+```
+
+### Setup Without basicSetup
+
+If you want full control over which features are included:
+
+```ts
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { defaultKeymap, historyKeymap, history } from "@codemirror/commands";
+import { javascript } from "@codemirror/lang-javascript";
+import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+
+const view = new EditorView({
+  state: EditorState.create({
+    doc: "// your code here\n",
+    extensions: [
+      lineNumbers(),
+      highlightActiveLine(),
+      history(),
+      syntaxHighlighting(defaultHighlightStyle),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      javascript(),
+    ],
+  }),
+  parent: document.getElementById("editor"),
+});
+```
+
+## Get Editor Content
+
+```ts
+// Get the full document as a string
+const content = view.state.doc.toString();
+
+// Get a specific line (1-indexed)
+const line = view.state.doc.line(1);
+console.log(line.text); // line content
+console.log(line.from); // start position
+console.log(line.to);   // end position
+
+// Get the number of lines
+const lineCount = view.state.doc.lines;
+
+// Get text in a range
+const slice = view.state.sliceDoc(0, 100);
+```
+
+## Set Editor Content
+
+```ts
+// Replace the entire document
+view.dispatch({
+  changes: {
+    from: 0,
+    to: view.state.doc.length,
+    insert: "new content here",
+  },
+});
+
+// Insert text at a position
+view.dispatch({
+  changes: { from: 10, insert: "inserted text" },
+});
+
+// Delete a range
+view.dispatch({
+  changes: { from: 5, to: 15 },
+});
+
+// Replace a range
+view.dispatch({
+  changes: { from: 5, to: 15, insert: "replacement" },
+});
+
+// Multiple changes in one transaction
+view.dispatch({
+  changes: [
+    { from: 0, to: 5, insert: "AAA" },
+    { from: 20, to: 25, insert: "BBB" },
+  ],
+});
+```
+
+<Warning>
+
+When dispatching multiple changes in a single transaction, positions in the `changes` array refer to positions in the original document (before any of the changes are applied). CodeMirror maps positions automatically.
+
+</Warning>
+
+## Replace the Entire Editor State
+
+To completely reset the editor with a new state (new document, new extensions, new everything):
+
+```ts
+view.setState(
+  EditorState.create({
+    doc: "brand new document",
+    extensions: [basicSetup, javascript()],
+  })
+);
+```
+
+## Listen for Changes
+
+### Using `updateListener`
+
+```ts
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        console.log("Document changed:", update.state.doc.toString());
+      }
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+### Using a `ViewPlugin`
+
+For more complex logic that needs access to the view:
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const changeTracker = ViewPlugin.fromClass(
+  class {
+    update(update: ViewUpdate) {
+      if (update.docChanged) {
+        // React to document changes
+        console.log("New length:", update.state.doc.length);
+      }
+      if (update.selectionSet) {
+        // React to selection changes
+        const { from, to } = update.state.selection.main;
+        console.log("Selection:", from, to);
+      }
+    }
+  }
+);
+```
+
+## Focus the Editor
+
+```ts
+// Focus the editor
+view.focus();
+
+// Check if the editor has focus
+const hasFocus = view.hasFocus;
+```
+
+## Selection
+
+```ts
+// Get the current selection
+const { from, to } = view.state.selection.main;
+
+// Get the selected text
+const selectedText = view.state.sliceDoc(from, to);
+
+// Set the cursor position (collapsed selection)
+view.dispatch({
+  selection: { anchor: 0 },
+});
+
+// Set a selection range
+view.dispatch({
+  selection: { anchor: 0, head: 10 },
+});
+
+// Set cursor position and scroll it into view
+view.dispatch({
+  selection: { anchor: 0 },
+  scrollIntoView: true,
+});
+```
+
+## Add and Remove Extensions
+
+CodeMirror does not have an `addExtension` / `removeExtension` API. Instead, you use compartments to dynamically reconfigure parts of the editor.
+
+### Using Compartments
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+// Create a compartment for the language
+const languageConf = new Compartment();
+
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    languageConf.of(javascript()),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+// Later: switch the language to Python
+import { python } from "@codemirror/lang-python";
+
+view.dispatch({
+  effects: languageConf.reconfigure(python()),
+});
+
+// Remove the extension by reconfiguring with an empty array
+view.dispatch({
+  effects: languageConf.reconfigure([]),
+});
+```
+
+### Toggle an Extension On/Off
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { lineNumbers } from "@codemirror/view";
+
+const lineNumberConf = new Compartment();
+let lineNumbersEnabled = true;
+
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    lineNumberConf.of(lineNumbers()),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+function toggleLineNumbers() {
+  lineNumbersEnabled = !lineNumbersEnabled;
+  view.dispatch({
+    effects: lineNumberConf.reconfigure(
+      lineNumbersEnabled ? lineNumbers() : []
+    ),
+  });
+}
+```
+
+## Dispatch Transactions
+
+Transactions are the only way to update the editor state. Every call to `view.dispatch()` creates and applies a transaction.
+
+```ts
+// Simple document change
+view.dispatch({
+  changes: { from: 0, insert: "Hello " },
+});
+
+// Change with selection update
+view.dispatch({
+  changes: { from: 0, insert: "Hello " },
+  selection: { anchor: 6 },
+});
+
+// Add an annotation to a transaction
+import { Annotation } from "@codemirror/state";
+
+const externalChange = Annotation.define<boolean>();
+
+view.dispatch({
+  changes: { from: 0, to: view.state.doc.length, insert: "reset" },
+  annotations: externalChange.of(true),
+});
+
+// Multiple sequential changes (applied as separate transactions)
+view.dispatch({ changes: { from: 0, insert: "A" } });
+view.dispatch({ changes: { from: 0, insert: "B" } });
+```
+
+## Read-Only Mode
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { Compartment } from "@codemirror/state";
+
+const readOnlyConf = new Compartment();
+
+const view = new EditorView({
+  doc: "read-only content",
+  extensions: [
+    basicSetup,
+    readOnlyConf.of(EditorState.readOnly.of(true)),
+  ],
+  parent: document.getElementById("editor"),
+});
+
+// Toggle read-only
+view.dispatch({
+  effects: readOnlyConf.reconfigure(
+    EditorState.readOnly.of(false)
+  ),
+});
+```
+
+## Destroy the Editor
+
+```ts
+view.destroy();
+```
+
+This removes the editor from the DOM and cleans up event listeners. The `EditorView` instance should not be used after calling `destroy()`.
+
+## Theming
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const myTheme = EditorView.theme({
+  "&": {
+    fontSize: "14px",
+    backgroundColor: "#1e1e1e",
+  },
+  ".cm-content": {
+    fontFamily: "'Fira Code', monospace",
+    color: "#d4d4d4",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#252525",
+    color: "#858585",
+    border: "none",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "#2a2a2a",
+  },
+  "&.cm-focused .cm-cursor": {
+    borderLeftColor: "#ffffff",
+  },
+});
+
+const view = new EditorView({
+  doc: "",
+  extensions: [basicSetup, myTheme],
+  parent: document.getElementById("editor"),
+});
+```
+
+Theme selectors use `&` to refer to the editor's outer element (`.cm-editor`). All CSS properties use their standard camelCase names.
+
+## DOM Events
+
+```ts
+const view = new EditorView({
+  doc: "",
+  extensions: [
+    basicSetup,
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        if (event.key === "Escape") {
+          console.log("Escape pressed");
+          // Return true to prevent further handling
+          return false;
+        }
+      },
+      blur(event, view) {
+        console.log("Editor lost focus");
+      },
+    }),
+  ],
+  parent: document.getElementById("editor"),
+});
+```

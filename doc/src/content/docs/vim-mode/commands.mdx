@@ -1,0 +1,255 @@
+---
+title: Commands & Motions
+description: Reference for supported vim commands, motions, operators, and text objects in @replit/codemirror-vim.
+sidebar_position: 2
+---
+
+# Commands & Motions
+
+This page lists the vim commands and motions supported by `@replit/codemirror-vim`. The coverage closely matches core vim behavior, though some less common features may be absent.
+
+## Motion Commands
+
+Motions move the cursor without modifying text. They can also be used after an operator to define the range of text to act on.
+
+### Character and Word Motions
+
+| Key | Motion |
+|-----|--------|
+| `h` | left |
+| `j` | down |
+| `k` | up |
+| `l` | right |
+| `w` | start of next word |
+| `b` | start of previous word |
+| `e` | end of current/next word |
+| `W` | start of next WORD (whitespace-delimited) |
+| `B` | start of previous WORD |
+| `E` | end of current/next WORD |
+
+### Line Motions
+
+| Key | Motion |
+|-----|--------|
+| `0` | first column of the line |
+| `^` | first non-blank character of the line |
+| `$` | end of the line |
+| `gg` | first line of the document |
+| `G` | last line of the document (or line N with count) |
+
+### Find Motions
+
+| Key | Motion |
+|-----|--------|
+| `f{char}` | next occurrence of `{char}` on the line |
+| `F{char}` | previous occurrence of `{char}` on the line |
+| `t{char}` | just before the next occurrence of `{char}` on the line |
+| `T{char}` | just after the previous occurrence of `{char}` on the line |
+| `;` | repeat last `f`/`F`/`t`/`T` motion |
+| `,` | repeat last `f`/`F`/`t`/`T` in reverse |
+
+### Other Motions
+
+| Key | Motion |
+|-----|--------|
+| `%` | matching bracket/parenthesis/brace |
+| `{` | previous blank line (paragraph boundary) |
+| `}` | next blank line (paragraph boundary) |
+
+## Operator Commands
+
+Operators act on a range defined by a subsequent motion or text object.
+
+| Key | Operator |
+|-----|----------|
+| `d` | delete |
+| `c` | change (delete and enter insert mode) |
+| `y` | yank (copy) |
+| `>` | indent right |
+| `<` | indent left |
+| `=` | auto-indent |
+| `gq` | format/wrap text |
+
+### Operator + Motion Combinations
+
+Combine an operator with a motion to act on the text between the cursor and the motion target.
+
+```
+dw      delete from cursor to start of next word
+d$      delete from cursor to end of line
+d0      delete from cursor to start of line
+cw      change word
+cb      change back one word
+yy      yank entire line (operator doubled = act on line)
+dd      delete entire line
+>>      indent current line
+<<      unindent current line
+gqq     format current line
+```
+
+### Operator + Text Object Combinations
+
+Text objects define a structured region of text. Combine them with operators for precise editing.
+
+```
+diw     delete inner word
+daw     delete a word (including surrounding space)
+ci"     change inside double quotes
+ca"     change around double quotes (including the quotes)
+di(     delete inside parentheses
+da(     delete around parentheses
+ci{     change inside curly braces
+da{     delete around curly braces
+dit     delete inside HTML/XML tag
+dat     delete around HTML/XML tag
+```
+
+## Text Objects
+
+Text objects are used after an operator or in visual mode to select a region.
+
+| Text Object | Description |
+|-------------|-------------|
+| `iw` | inner word |
+| `aw` | a word (with surrounding whitespace) |
+| `i"` | inside double quotes |
+| `a"` | around double quotes |
+| `i'` | inside single quotes |
+| `a'` | around single quotes |
+| `` i` `` | inside backticks |
+| `` a` `` | around backticks |
+| `i(` or `ib` | inside parentheses |
+| `a(` or `ab` | around parentheses |
+| `i{` or `iB` | inside curly braces |
+| `a{` or `aB` | around curly braces |
+| `i[` | inside square brackets |
+| `a[` | around square brackets |
+| `it` | inside HTML/XML tag |
+| `at` | around HTML/XML tag |
+
+## Insert Mode Commands
+
+These commands transition from normal mode to insert mode at various positions.
+
+| Key | Action |
+|-----|--------|
+| `i` | insert before cursor |
+| `a` | insert after cursor |
+| `I` | insert at beginning of line |
+| `A` | insert at end of line |
+| `o` | open new line below and insert |
+| `O` | open new line above and insert |
+| `s` | substitute character (delete char and enter insert) |
+| `S` | substitute line (delete line content and enter insert) |
+| `C` | change to end of line |
+
+Press `Esc` or `Ctrl-[` to return to normal mode from insert mode.
+
+## Visual Mode Commands
+
+| Key | Action |
+|-----|--------|
+| `v` | enter character-wise visual mode |
+| `V` | enter line-wise visual mode |
+| `Ctrl-v` | enter block (column) visual mode |
+| `o` | move cursor to other end of selection (in visual mode) |
+| `gv` | reselect last visual selection |
+
+In visual mode, use motions to extend the selection, then apply an operator (`d`, `c`, `y`, `>`, `<`) to act on the selected text.
+
+## Search
+
+| Key | Action |
+|-----|--------|
+| `/` | search forward |
+| `?` | search backward |
+| `n` | repeat last search in same direction |
+| `N` | repeat last search in opposite direction |
+| `*` | search forward for word under cursor |
+| `#` | search backward for word under cursor |
+
+Search accepts regular expressions. Press `Enter` to execute the search, `Esc` to cancel.
+
+## Marks
+
+Marks save cursor positions that you can jump back to later.
+
+| Key | Action |
+|-----|--------|
+| `m{a-z}` | set mark `{a-z}` at current position |
+| `'{a-z}` | jump to the line of mark `{a-z}` |
+| `` `{a-z} `` | jump to the exact position of mark `{a-z}` |
+
+<Note>
+
+Marks in `@replit/codemirror-vim` are buffer-local. Global marks (uppercase `A-Z`) may have limited support.
+
+</Note>
+
+## Registers
+
+Registers are named storage locations for yanked or deleted text.
+
+| Key | Register |
+|-----|----------|
+| `"{a-z}` | named registers (use before an operator or yank) |
+| `"0` | yank register (last yank) |
+| `"1`--`"9` | numbered delete registers |
+| `"+` | system clipboard register |
+| `"*` | system selection register |
+
+To use a register, type `"` followed by the register name before a yank, delete, or put command.
+
+```
+"ayy    yank current line into register a
+"ap     put (paste) from register a
+"+yy    yank current line to system clipboard
+"+p     paste from system clipboard
+```
+
+<Tip>
+
+See the [Clipboard Integration](/docs/vim-mode/clipboard/) page for how to make clipboard registers actually sync with the system clipboard.
+
+</Tip>
+
+## Macros
+
+Macros record a sequence of keystrokes and replay them.
+
+| Key | Action |
+|-----|--------|
+| `q{a-z}` | start recording into register `{a-z}` |
+| `q` | stop recording (while recording) |
+| `@{a-z}` | replay macro from register `{a-z}` |
+| `@@` | replay the last executed macro |
+
+Macros can be prefixed with a count: `10@a` replays the macro in register `a` ten times.
+
+## Repeat
+
+| Key | Action |
+|-----|--------|
+| `.` | repeat the last change command |
+
+The dot command repeats the last editing action (insert, delete, change, etc.) including any motion or text object that was part of it.
+
+## Undo and Redo
+
+| Key | Action |
+|-----|--------|
+| `u` | undo |
+| `Ctrl-r` | redo |
+
+## Count Prefix
+
+Most commands accept a numeric prefix that repeats the command or modifies its behavior.
+
+```
+5j      move down 5 lines
+3dw     delete 3 words
+10@a    replay macro a 10 times
+4>>     indent 4 lines
+```
+
+The count is typed before the operator or motion. For operator commands, it multiplies with the motion count: `2d3w` deletes 6 words.

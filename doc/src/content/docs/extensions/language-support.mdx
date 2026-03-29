@@ -1,0 +1,209 @@
+---
+title: Language Support
+description: "How language support works in CodeMirror 6: language packages, syntax highlighting, code block highlighting in markdown, and language-specific features."
+sidebar_position: 2
+---
+
+## How Language Support Works
+
+In CodeMirror 6, language support is provided through extensions, not built into the core editor. Each language is a separate npm package that provides:
+
+- A parser (built on the [Lezer](https://lezer.codemirror.net/) framework) that produces a syntax tree
+- Syntax highlighting rules that map tree node types to highlight tags
+- Language-specific features such as indentation rules, code folding, and autocompletion
+
+A language support extension is created by calling the language package's main function, which returns an `Extension` you can pass to `EditorState.create()`.
+
+```ts
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [javascript()];
+```
+
+Under the hood, a language extension bundles a `Language` instance (wrapping a Lezer parser) with additional extensions for indentation, folding, and other language-specific behaviors.
+
+## @codemirror/lang-javascript
+
+Provides support for JavaScript and TypeScript, including JSX and TSX.
+
+```ts
+import { javascript } from "@codemirror/lang-javascript";
+
+// Plain JavaScript
+const jsExtensions = [javascript()];
+
+// TypeScript
+const tsExtensions = [javascript({ typescript: true })];
+
+// JSX
+const jsxExtensions = [javascript({ jsx: true })];
+
+// TypeScript + JSX (TSX)
+const tsxExtensions = [javascript({ typescript: true, jsx: true })];
+```
+
+The package includes autocompletion for JavaScript globals and keywords when paired with `@codemirror/autocomplete`.
+
+## @codemirror/lang-markdown
+
+Provides Markdown language support with optional embedded code block highlighting.
+
+```ts
+import { markdown } from "@codemirror/lang-markdown";
+
+const extensions = [markdown()];
+```
+
+### markdownLanguage
+
+The `markdownLanguage` object is the base `Language` instance for Markdown. It is used as the `base` option when you want to configure Markdown parsing with code block highlighting.
+
+### Code Block Highlighting
+
+To highlight fenced code blocks in Markdown with their respective languages, pass a `codeLanguages` array. The `@codemirror/language-data` package provides a comprehensive list of language descriptions.
+
+```ts
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const extensions = [
+  markdown({
+    base: markdownLanguage,
+    codeLanguages: languages,
+  }),
+];
+```
+
+With this configuration, fenced code blocks like the following will be parsed and highlighted using the appropriate language grammar:
+
+````markdown
+```js
+
+const x = 42;
+
+```
+
+```python
+
+x = 42
+
+```
+````
+
+The `languages` array from `@codemirror/language-data` contains `LanguageDescription` objects. Each description knows how to lazy-load its parser on demand, so only the languages actually present in the document get loaded.
+
+## @codemirror/language-data
+
+This package provides `LanguageDescription` entries for a wide range of languages. It is primarily used with `@codemirror/lang-markdown` for code block highlighting, but it can also be used to dynamically load language support based on a file name or MIME type.
+
+```ts
+import { languages } from "@codemirror/language-data";
+
+// Find a language by name
+const jsLang = languages.find((l) => l.name === "JavaScript");
+
+// Find a language by file extension
+const pyLang = languages.find((l) =>
+  l.extensions.includes("py"),
+);
+```
+
+Each `LanguageDescription` has a `load()` method that returns a `Promise<LanguageSupport>`, enabling lazy loading:
+
+```ts
+const lang = languages.find((l) => l.name === "Python");
+if (lang) {
+  const support = await lang.load();
+  // Use support.extension in your editor
+}
+```
+
+## Language-Specific Features
+
+### Autocompletion
+
+Language packages can provide completion sources. For example, `@codemirror/lang-javascript` includes completions for JavaScript globals. To use them, include the `@codemirror/autocomplete` extension alongside the language extension.
+
+```ts
+import { autocompletion } from "@codemirror/autocomplete";
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [
+  javascript(),
+  autocompletion(),
+];
+```
+
+### Linting
+
+Language packages can integrate with `@codemirror/lint` to show diagnostics. Linting is not bundled into the language package itself; you configure a linter separately and pass it as an extension.
+
+```ts
+import { linter, lintGutter } from "@codemirror/lint";
+import { javascript } from "@codemirror/lang-javascript";
+
+function myJsLinter(view) {
+  // Return an array of diagnostics
+  return [];
+}
+
+const extensions = [
+  javascript(),
+  linter(myJsLinter),
+  lintGutter(),
+];
+```
+
+### Indentation and Folding
+
+Language grammars define indentation rules and foldable regions through the syntax tree. Extensions like `indentOnInput()` and `foldGutter()` from `@codemirror/language` use the active language's syntax tree to determine indentation levels and fold boundaries.
+
+```ts
+import { indentOnInput, foldGutter } from "@codemirror/language";
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [
+  javascript(),
+  indentOnInput(),
+  foldGutter(),
+];
+```
+
+## Full Markdown Editor Example
+
+A complete setup for a Markdown editor with code block highlighting, bracket matching, and autocompletion:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+import { bracketMatching, indentOnInput } from "@codemirror/language";
+import { closeBrackets } from "@codemirror/autocomplete";
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const state = EditorState.create({
+  doc: "# Hello\n\nWrite some **Markdown** here.",
+  extensions: [
+    lineNumbers(),
+    highlightActiveLine(),
+    history(),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    bracketMatching(),
+    closeBrackets(),
+    indentOnInput(),
+    highlightSelectionMatches(),
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: languages,
+    }),
+    EditorView.lineWrapping,
+  ],
+});
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```

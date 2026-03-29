@@ -1,0 +1,298 @@
+---
+title: キーバインディング
+description: "CodeMirror 6 でのキーバインディングの設定: keymap Facet、KeyBinding インターフェース、組み込みキーマップ、カスタムバインディング。"
+sidebar_position: 6
+---
+
+# キーバインディング
+
+CodeMirror 6 のキーバインディングは `keymap` Facet を通じて処理されます。CodeMirror 5 とは異なり、グローバルなキーマップレジストリは存在しません。必要なキーマップを Extension として明示的に含めます。
+
+## keymap Facet
+
+`keymap` は `@codemirror/view` の Facet で、`KeyBinding` オブジェクトの配列を受け取ります:
+
+```ts
+import { keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let view = new EditorView({
+  extensions: [keymap.of(defaultKeymap)],
+  parent: document.body,
+});
+```
+
+Extension に複数の `keymap.of()` 呼び出しを含めることができます。キーイベントを処理するものが見つかるまで順番に試行されます。
+
+## KeyBinding インターフェース
+
+`KeyBinding` オブジェクトは単一のバインディングを記述します:
+
+```ts
+interface KeyBinding {
+  key?: string; // Key name (e.g., "Ctrl-s", "Enter")
+  mac?: string; // macOS-specific override
+  linux?: string; // Linux-specific override
+  win?: string; // Windows-specific override
+  run?: (view: EditorView) => boolean; // Handler function
+  shift?: (view: EditorView) => boolean; // Handler when Shift is also held
+  scope?: string; // Scope restriction (e.g., "editor")
+  preventDefault?: boolean; // Whether to prevent default browser behavior
+  stopPropagation?: boolean; // Whether to stop event propagation
+}
+```
+
+`run` 関数はキーを処理した場合は `true` を、後続のバインディングに試行させる場合は `false` を返します:
+
+```ts
+let binding = {
+  key: "Ctrl-s",
+  run(view) {
+    saveDocument(view.state.doc.toString());
+    return true;
+  },
+};
+```
+
+## キー名と修飾キー
+
+キー名は特定の形式に従います: 修飾キーを `-` で結合し、その後にキー名を記述します。
+
+#### 修飾キー
+
+- `Ctrl` -- Control キー（全プラットフォーム）
+- `Alt` -- Alt/Option キー
+- `Shift` -- Shift キー
+- `Meta` -- macOS の Command キー、Windows の Windows キー
+- `Mod` -- Windows/Linux では `Ctrl`、macOS では `Cmd`（便利なエイリアス）
+
+#### キー名
+
+- 文字キー: `a` から `z`（小文字）
+- 数字キー: `0` から `9`
+- ファンクションキー: `F1` から `F12`
+- 特殊キー: `Enter`、`Escape`、`Backspace`、`Tab`、`Delete`、`Home`、`End`、`PageUp`、`PageDown`、`ArrowUp`、`ArrowDown`、`ArrowLeft`、`ArrowRight`、`Space`
+
+#### 例
+
+```ts
+let bindings = [
+  { key: "Ctrl-s", run: handleSave },
+  { key: "Ctrl-Shift-p", run: openCommandPalette },
+  { key: "Alt-ArrowUp", run: moveLineUp },
+  { key: "Mod-z", run: undo }, // Ctrl-z on Windows, Cmd-z on Mac
+  { key: "F2", run: renameSymbol },
+  { key: "Escape", run: closePanel },
+];
+```
+
+## 組み込みキーマップ
+
+CodeMirror はいくつかのビルド済みキーマップ配列を提供しています。
+
+#### defaultKeymap
+
+`@codemirror/commands` から。標準的な編集バインディングを提供します:
+
+- `ArrowLeft`、`ArrowRight` -- 文字単位の移動
+- `ArrowUp`、`ArrowDown` -- 行単位の移動
+- `Mod-ArrowLeft`、`Mod-ArrowRight` -- 単語単位の移動（プラットフォーム対応）
+- `Home`、`End` -- 行頭/行末
+- `Ctrl-Home`、`Ctrl-End` -- ドキュメントの先頭/末尾
+- `Enter` -- 新しい行を挿入
+- `Backspace`、`Delete` -- 文字の削除
+- `Mod-Backspace`、`Mod-Delete` -- 単語の削除
+- `Mod-a` -- すべて選択
+- `Ctrl-d` -- 行の削除（一部のプラットフォーム）
+- 移動キーの `Shift` バリアント -- 選択範囲を拡張
+
+```ts
+import { defaultKeymap } from "@codemirror/commands";
+```
+
+#### historyKeymap
+
+`@codemirror/commands` から。Extension に `history()` が含まれている必要があります:
+
+- `Mod-z` -- undo
+- `Mod-y` または `Mod-Shift-z` -- redo
+
+```ts
+import { history, historyKeymap } from "@codemirror/commands";
+
+let extensions = [history(), keymap.of(historyKeymap)];
+```
+
+#### searchKeymap
+
+`@codemirror/search` から。Extension に `search()` が含まれている必要があります:
+
+- `Mod-f` -- 検索パネルを開く
+- `Mod-h` -- 検索・置換パネルを開く（macOS では `Mod-Shift-h`）
+- `F3` または `Mod-g` -- 次を検索
+- `Shift-F3` または `Mod-Shift-g` -- 前を検索
+- `Alt-g` -- 行に移動
+
+```ts
+import { search, searchKeymap } from "@codemirror/search";
+
+let extensions = [search(), keymap.of(searchKeymap)];
+```
+
+#### completionKeymap
+
+`@codemirror/autocomplete` から。オートコンプリートのナビゲーションを提供します:
+
+- `Ctrl-Space` -- 補完をトリガー
+- `Escape` -- 補完ポップアップを閉じる
+- `ArrowDown`、`ArrowUp` -- 補完リストをナビゲート
+- `Enter` -- 補完を確定
+
+#### closeBracketsKeymap
+
+`@codemirror/autocomplete` から。自動閉じされた対応する括弧を削除する `Backspace` の処理を提供します。
+
+## 複数のキーマップと優先度
+
+複数のキーマップが含まれている場合、順番にチェックされます。`run` 関数が `true` を返した最初のバインディングが採用されます。
+
+```ts
+let customKeymap = keymap.of([
+  { key: "Ctrl-s", run: handleSave },
+]);
+
+let extensions = [
+  customKeymap, // Checked first
+  keymap.of(defaultKeymap), // Checked if custom doesn't handle it
+];
+```
+
+位置に関係なくキーマップが優先されることを保証するには、`Prec` を使用します:
+
+```ts
+import { Prec } from "@codemirror/state";
+
+let highPriorityKeymap = Prec.high(
+  keymap.of([
+    { key: "Ctrl-s", run: handleSave },
+  ])
+);
+```
+
+## プラットフォーム固有のバインディング
+
+`mac`、`win`、`linux` フィールドを使用して、プラットフォーム固有のキーの組み合わせを提供します:
+
+```ts
+let binding = {
+  key: "Ctrl-Shift-k", // Default for all platforms
+  mac: "Cmd-Shift-k", // macOS override
+  run: deleteLine,
+};
+```
+
+`Mod` ショートハンドは最も一般的なケースを処理します。Windows/Linux では `Ctrl`、macOS では `Cmd` にマッピングされます:
+
+```ts
+let binding = {
+  key: "Mod-s", // Ctrl-s on Windows/Linux, Cmd-s on macOS
+  run: handleSave,
+};
+```
+
+## indentWithTab バインディング
+
+デフォルトでは、CodeMirror 6 で `Tab` はタブ文字を挿入しません（アクセシビリティのため -- Tab は UI 要素間のフォーカス移動に使用されるべき）。`Tab` でインデントしたい場合は、`indentWithTab` を import します:
+
+```ts
+import { indentWithTab } from "@codemirror/commands";
+
+let extensions = [keymap.of([indentWithTab])];
+```
+
+`indentWithTab` は以下を提供します:
+
+- `Tab` -- 選択された行をインデント（またはカーソル位置にインデントを挿入）
+- `Shift-Tab` -- 選択された行のインデントを解除
+
+<Warning>
+
+`indentWithTab` を使用すると、エディタのキーボードアクセシビリティが変わります。キーボードでナビゲーションするユーザーはフォーカスの移動に Tab を使用します。あなたのユースケースがこのトレードオフを必要とするか検討してください。
+
+</Warning>
+
+## カスタムキーマップの作成
+
+`KeyBinding` オブジェクトの配列としてキーマップを構築し、`keymap.of()` でラップします:
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+function duplicateLine(view) {
+  let { state } = view;
+  let line = state.doc.lineAt(state.selection.main.head);
+  let text = line.text;
+  view.dispatch({
+    changes: { from: line.to, insert: "\n" + text },
+  });
+  return true;
+}
+
+function toggleComment(view) {
+  // Toggle line comment implementation
+  let { state } = view;
+  let line = state.doc.lineAt(state.selection.main.head);
+  if (line.text.startsWith("// ")) {
+    view.dispatch({
+      changes: { from: line.from, to: line.from + 3 },
+    });
+  } else {
+    view.dispatch({
+      changes: { from: line.from, insert: "// " },
+    });
+  }
+  return true;
+}
+
+let myKeymap = keymap.of([
+  { key: "Ctrl-Shift-d", run: duplicateLine },
+  { key: "Ctrl-/", run: toggleComment },
+]);
+```
+
+## 完全な例
+
+すべてをまとめると:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
+import { search, searchKeymap } from "@codemirror/search";
+
+function handleSave(view) {
+  console.log("Saving:", view.state.doc.toString());
+  return true;
+}
+
+let view = new EditorView({
+  doc: "// Type here\n",
+  extensions: [
+    history(),
+    search(),
+    keymap.of([
+      { key: "Mod-s", run: handleSave, preventDefault: true },
+      indentWithTab,
+    ]),
+    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+  ],
+  parent: document.getElementById("editor"),
+});
+```
+
+このセットアップでは、カスタムの `Mod-s` バインディングが Extension 配列内で先に記述されているため、最初にチェックされます。`defaultKeymap`、`historyKeymap`、`searchKeymap` は単一の配列にスプレッドされ、グループとしてチェックされます。

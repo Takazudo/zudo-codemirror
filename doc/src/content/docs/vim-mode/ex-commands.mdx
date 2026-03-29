@@ -1,0 +1,169 @@
+---
+title: Ex Commands
+description: Ex command-line mode reference and custom command definition in @replit/codemirror-vim.
+sidebar_position: 3
+---
+
+# Ex Commands
+
+Ex commands are entered from normal mode by pressing `:`. A command-line prompt appears at the bottom of the editor where you type the command and press `Enter` to execute.
+
+## Built-in Ex Commands
+
+### File and Buffer Commands
+
+| Command | Description |
+|---------|-------------|
+| `:w` | write (save). Requires a custom handler to do anything useful -- see below. |
+| `:q` | quit. Requires a custom handler. |
+| `:wq` | write and quit |
+| `:e {file}` | edit a file (limited in browser context) |
+
+<Note>
+
+`:w` and `:q` have no built-in behavior in a browser editor. You must define custom handlers with `Vim.defineEx()` to connect them to your application's save and close logic.
+
+</Note>
+
+### Key Mapping Commands
+
+| Command | Description |
+|---------|-------------|
+| `:map {lhs} {rhs}` | create a key mapping (all modes) |
+| `:nmap {lhs} {rhs}` | normal mode mapping |
+| `:imap {lhs} {rhs}` | insert mode mapping |
+| `:vmap {lhs} {rhs}` | visual mode mapping |
+| `:noremap {lhs} {rhs}` | non-recursive mapping (all modes) |
+| `:nnoremap {lhs} {rhs}` | non-recursive normal mode mapping |
+| `:inoremap {lhs} {rhs}` | non-recursive insert mode mapping |
+| `:vnoremap {lhs} {rhs}` | non-recursive visual mode mapping |
+| `:unmap {lhs}` | remove a mapping (all modes) |
+| `:nunmap {lhs}` | remove normal mode mapping |
+| `:iunmap {lhs}` | remove insert mode mapping |
+| `:vunmap {lhs}` | remove visual mode mapping |
+
+### Set Commands
+
+| Command | Description |
+|---------|-------------|
+| `:set number` | show line numbers |
+| `:set nonumber` | hide line numbers |
+| `:set wrap` | enable line wrapping (requires custom option -- see [Vim Options](/docs/vim-mode/options/)) |
+| `:set nowrap` | disable line wrapping |
+
+### Text Manipulation Commands
+
+| Command | Description |
+|---------|-------------|
+| `:sort` | sort lines in selection or entire buffer |
+| `:s/pattern/replacement/flags` | substitute on current line |
+| `:%s/pattern/replacement/flags` | substitute in entire buffer |
+| `:g/pattern/command` | execute command on lines matching pattern |
+
+#### Substitute Flags
+
+| Flag | Description |
+|------|-------------|
+| `g` | replace all occurrences on each line (not just the first) |
+| `i` | case-insensitive matching |
+| `c` | confirm each replacement |
+
+#### Substitute Examples
+
+```
+:s/foo/bar/          substitute first 'foo' with 'bar' on current line
+:s/foo/bar/g         substitute all 'foo' with 'bar' on current line
+:%s/foo/bar/g        substitute all 'foo' with 'bar' in entire buffer
+:%s/foo/bar/gi       case-insensitive substitute in entire buffer
+:5,10s/foo/bar/g     substitute in lines 5 through 10
+```
+
+#### Global Command Examples
+
+```
+:g/TODO/d            delete all lines containing 'TODO'
+:g/^$/d              delete all blank lines
+:g/pattern/normal dd delete lines matching pattern using normal mode command
+```
+
+### Information Commands
+
+| Command | Description |
+|---------|-------------|
+| `:marks` | list current marks |
+| `:registers` | list register contents |
+
+## Defining Custom Ex Commands
+
+Use `Vim.defineEx()` to register handlers for Ex commands. This is how you make `:w`, `:q`, and other commands functional in your application.
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+### Vim.defineEx() Signature
+
+```ts
+Vim.defineEx(name: string, prefix: string, handler: (cm: any, params: any) => void): void
+```
+
+- `name` -- the full command name (e.g., `"write"`)
+- `prefix` -- the short alias (e.g., `"w"`)
+- `handler` -- the function to execute. Receives the CodeMirror adapter instance and a params object.
+
+### Implementing :w (Write/Save)
+
+```ts
+Vim.defineEx("write", "w", function (cm, params) {
+  // Your save logic here
+  const content = cm.getValue();
+  saveToServer(content);
+});
+```
+
+### Implementing :q (Quit)
+
+```ts
+Vim.defineEx("quit", "q", function (cm, params) {
+  // Your close/quit logic here
+  closeEditor();
+});
+```
+
+### Implementing :wq (Write and Quit)
+
+```ts
+Vim.defineEx("wquit", "wq", function (cm, params) {
+  const content = cm.getValue();
+  saveToServer(content).then(() => {
+    closeEditor();
+  });
+});
+```
+
+### Custom Commands with Arguments
+
+The `params` object provides access to command-line arguments.
+
+```ts
+Vim.defineEx("theme", "theme", function (cm, params) {
+  const themeName = params.args?.[0];
+  if (themeName) {
+    applyTheme(themeName);
+  }
+});
+```
+
+This allows `:theme dark` or `:theme light` from the vim command line.
+
+### Custom Commands with Range
+
+Ex commands that operate on a line range receive range information in `params`.
+
+```ts
+Vim.defineEx("upper", "upper", function (cm, params) {
+  const { line: start } = params.line ?? { line: 0 };
+  const { line: end } = params.lineEnd ?? { line: cm.lineCount() - 1 };
+  // Operate on lines start through end
+});
+```

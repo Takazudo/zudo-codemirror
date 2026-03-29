@@ -1,0 +1,367 @@
+---
+title: 動的な設定変更
+description: "CodeMirror 6 で Compartment を使って実行時に Extension を動的に入れ替える方法: 機能のトグル、テーマの切り替え、ランタイム再設定。"
+sidebar_position: 6
+---
+
+## Compartment
+
+CodeMirror 6 では、Extension は通常 `EditorState` を作成する時点で固定されます。`Compartment` を使うと、エディタが既に実行中でも Extension を変更できます。Extension を Compartment でラップし、後からエフェクトをディスパッチして内容を置き換えます。
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+const myCompartment = new Compartment();
+```
+
+## Compartment の作成
+
+Compartment は `of()` メソッドを使って初期の Extension 値をラップします。状態を作成する際に、Compartment の `of()` の結果を Extension 配列の一部として渡します。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
+import { lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+
+const state = EditorState.create({
+  doc: "Hello",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+  ],
+});
+```
+
+## Compartment の再設定
+
+実行時に Compartment 内の Extension を変更するには、`reconfigure` エフェクトを含むトランザクションをディスパッチします。
+
+```ts
+// Remove the extension (pass an empty array)
+view.dispatch({
+  effects: lineNumberCompartment.reconfigure([]),
+});
+
+// Re-add the extension
+view.dispatch({
+  effects: lineNumberCompartment.reconfigure(lineNumbers()),
+});
+```
+
+空の配列 `[]` を渡すと、実質的に Extension が無効化されます。新しい Extension を渡すと、以前のものが置き換えられます。
+
+## 例: 行番号のトグル
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
+import { EditorView, lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+let lineNumbersEnabled = true;
+
+const state = EditorState.create({
+  doc: "Toggle line numbers on and off.",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+  ],
+});
+
+const view = new EditorView({ state, parent: document.getElementById("editor") });
+
+function toggleLineNumbers() {
+  lineNumbersEnabled = !lineNumbersEnabled;
+  view.dispatch({
+    effects: lineNumberCompartment.reconfigure(
+      lineNumbersEnabled ? lineNumbers() : [],
+    ),
+  });
+}
+```
+
+以下のボタンを使って行番号のオン/オフを切り替えてみてください:
+
+<HtmlPreview
+  title="Toggle Line Numbers"
+  height={300}
+  html={`<div style="margin-bottom: 8px;"><button id="toggle-btn" style="padding: 4px 12px; cursor: pointer;">Toggle Line Numbers</button> <span id="status">Line numbers: ON</span></div><div id="editor"></div>`}
+  js={`
+    const lineNumberCompartment = new CM.Compartment();
+    let lineNumbersEnabled = true;
+
+    const view = new CM.EditorView({
+      doc: 'function hello() {\\n  console.log("Hello, world!");\\n}\\n\\nfunction add(a, b) {\\n  return a + b;\\n}\\n\\nhello();\\nconsole.log(add(2, 3));\\n',
+      extensions: [
+        CM.minimalSetup,
+        CM.highlightActiveLine(),
+        CM.bracketMatching(),
+        CM.foldGutter(),
+        lineNumberCompartment.of(CM.lineNumbers()),
+        CM.javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("toggle-btn").addEventListener("click", () => {
+      lineNumbersEnabled = !lineNumbersEnabled;
+      view.dispatch({
+        effects: lineNumberCompartment.reconfigure(
+          lineNumbersEnabled ? CM.lineNumbers() : []
+        ),
+      });
+      document.getElementById("status").textContent =
+        "Line numbers: " + (lineNumbersEnabled ? "ON" : "OFF");
+    });
+  `}
+  displayJs={`
+    import { EditorView, minimalSetup } from "codemirror";
+    import { Compartment } from "@codemirror/state";
+    import { lineNumbers, highlightActiveLine } from "@codemirror/view";
+    import { bracketMatching, foldGutter } from "@codemirror/language";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const lineNumberCompartment = new Compartment();
+    let lineNumbersEnabled = true;
+
+    // minimalSetup を使用（lineNumbers を含まない）して Compartment で完全に制御
+    const view = new EditorView({
+      doc: 'function hello() {\\n  ...',
+      extensions: [
+        minimalSetup,
+        highlightActiveLine(),
+        bracketMatching(),
+        foldGutter(),
+        lineNumberCompartment.of(lineNumbers()),
+        javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("toggle-btn").addEventListener("click", () => {
+      lineNumbersEnabled = !lineNumbersEnabled;
+      view.dispatch({
+        effects: lineNumberCompartment.reconfigure(
+          lineNumbersEnabled ? lineNumbers() : []
+        ),
+      });
+      document.getElementById("status").textContent =
+        "Line numbers: " + (lineNumbersEnabled ? "ON" : "OFF");
+    });
+  `}
+/>
+
+## 例: テーマの切り替え
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+const themeCompartment = new Compartment();
+
+const lightTheme = EditorView.theme({
+  "&": { backgroundColor: "#ffffff", color: "#333333" },
+  ".cm-gutters": { backgroundColor: "#f0f0f0" },
+});
+
+const darkTheme = EditorView.theme({
+  "&": { backgroundColor: "#1e1e1e", color: "#d4d4d4" },
+  ".cm-gutters": { backgroundColor: "#252526" },
+}, { dark: true });
+
+const state = EditorState.create({
+  doc: "Switch between light and dark.",
+  extensions: [
+    themeCompartment.of(lightTheme),
+  ],
+});
+
+const view = new EditorView({ state, parent: document.getElementById("editor") });
+
+function setTheme(dark: boolean) {
+  view.dispatch({
+    effects: themeCompartment.reconfigure(dark ? darkTheme : lightTheme),
+  });
+}
+```
+
+「Toggle Theme」ボタンをクリックして、Compartment を使ってライトテーマと `oneDark` テーマをランタイムで切り替えてみてください:
+
+<HtmlPreview
+  title="Toggle Theme with Compartment"
+  height={320}
+  html={`<div style="margin-bottom: 8px;"><button id="theme-btn" style="padding: 4px 12px; cursor: pointer;">Toggle Theme</button> <span id="theme-status">Theme: light</span></div><div id="editor"></div>`}
+  js={`
+    const themeCompartment = new CM.Compartment();
+    let isDark = false;
+
+    const lightTheme = CM.EditorView.theme({
+      "&": { backgroundColor: "#ffffff" },
+    });
+
+    const view = new CM.EditorView({
+      doc: "// Toggle between light and dark themes\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nfor (let i = 0; i < 10; i++) {\\n  console.log(fibonacci(i));\\n}\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+        themeCompartment.of(lightTheme),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("theme-btn").addEventListener("click", () => {
+      isDark = !isDark;
+      view.dispatch({
+        effects: themeCompartment.reconfigure(
+          isDark ? CM.oneDark : lightTheme
+        ),
+      });
+      document.getElementById("theme-status").textContent =
+        "Theme: " + (isDark ? "oneDark" : "light");
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { Compartment } from "@codemirror/state";
+    import { javascript } from "@codemirror/lang-javascript";
+    import { oneDark } from "@codemirror/theme-one-dark";
+
+    const themeCompartment = new Compartment();
+    let isDark = false;
+
+    const lightTheme = EditorView.theme({
+      "&": { backgroundColor: "#ffffff" },
+    });
+
+    const view = new EditorView({
+      doc: "// Toggle between light and dark themes\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nfor (let i = 0; i < 10; i++) {\\n  console.log(fibonacci(i));\\n}\\n",
+      extensions: [
+        basicSetup,
+        javascript(),
+        themeCompartment.of(lightTheme),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("theme-btn").addEventListener("click", () => {
+      isDark = !isDark;
+      view.dispatch({
+        effects: themeCompartment.reconfigure(
+          isDark ? oneDark : lightTheme
+        ),
+      });
+      document.getElementById("theme-status").textContent =
+        "Theme: " + (isDark ? "oneDark" : "light");
+    });
+  `}
+/>
+
+## 例: Vim モードのトグル
+
+`@replit/codemirror-vim` パッケージは Vim のキーバインディングを提供します。Compartment でラップすることで、ユーザーが実行時に Vim モードを有効/無効にできます。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { vim } from "@replit/codemirror-vim";
+
+const vimCompartment = new Compartment();
+let vimEnabled = false;
+
+// Initial setup: vim off
+const extensions = [
+  vimCompartment.of([]),
+];
+
+function toggleVim() {
+  vimEnabled = !vimEnabled;
+  view.dispatch({
+    effects: vimCompartment.reconfigure(
+      vimEnabled ? vim() : [],
+    ),
+  });
+}
+```
+
+<Warning>
+
+Vim モードをトグルする場合、Vim Extension は Extension 配列の先頭付近に配置し、他のキーマップよりも先にキーイベントをインターセプトできるようにしてください。
+
+</Warning>
+
+## 例: 行の折り返しのトグル
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+const wrapCompartment = new Compartment();
+
+// Initial setup with wrapping enabled
+const extensions = [
+  wrapCompartment.of(EditorView.lineWrapping),
+];
+
+// Toggle wrapping off
+view.dispatch({
+  effects: wrapCompartment.reconfigure([]),
+});
+
+// Toggle wrapping on
+view.dispatch({
+  effects: wrapCompartment.reconfigure(EditorView.lineWrapping),
+});
+```
+
+## 複数の Compartment
+
+必要な数だけ Compartment を使用できます。各 Compartment は独立して自身の Extension を管理します。
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView, lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+const wrapCompartment = new Compartment();
+const themeCompartment = new Compartment();
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+    wrapCompartment.of(EditorView.lineWrapping),
+    themeCompartment.of(myTheme),
+  ],
+});
+```
+
+1 回のディスパッチでエフェクトの配列を渡すことで、複数の Compartment を同時に再設定できます。
+
+```ts
+view.dispatch({
+  effects: [
+    themeCompartment.reconfigure(darkTheme),
+    wrapCompartment.reconfigure([]),
+  ],
+});
+```
+
+## 現在の Compartment の値を確認する
+
+`compartment.get()` を使って、Compartment が現在保持している Extension を確認できます。
+
+```ts
+const currentExtension = lineNumberCompartment.get(view.state);
+```
+
+これは現在の Extension の値を返します。トグル前の現在の状態を判定するのに便利です。
+
+## Compartment を使うべき場面
+
+Compartment は以下のようなケースに適したツールです。
+
+- 実行時に機能を有効/無効にする（行番号、折り返し、Vim モード）
+- テーマやハイライトスタイルを切り替える
+- ユーザーがファイルを切り替えたときに言語サポートを変更する
+- ユーザー設定に基づいて設定を更新する
+
+トランザクションごとに変化する状態（ワードカウントなど）には、代わりに `StateField` を使用してください。Compartment は Extension 全体の入れ替え用であり、きめ細かな状態更新には向いていません。

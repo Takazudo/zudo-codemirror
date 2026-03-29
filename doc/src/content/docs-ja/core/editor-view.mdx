@@ -1,0 +1,362 @@
+---
+title: EditorView
+description: "CodeMirror 6 の EditorView の操作: DOM レンダリング、Transaction の dispatch、テーマ、プラグイン、View のライフサイクル。"
+sidebar_position: 3
+---
+
+# EditorView
+
+`EditorView` は `EditorState` を DOM に接続する命令型シェルです。エディタをレンダリングし、ユーザー入力を処理し、状態の更新を調整します。`EditorState` が純粋に関数型であるのに対し、`EditorView` は副作用を管理します: DOM の操作、スクロール、フォーカス、イベント処理。
+
+`@codemirror/view` から import します:
+
+```ts
+import { EditorView } from "@codemirror/view";
+```
+
+## EditorView の作成
+
+`parent` 要素と、オプションで事前に構築した `EditorState` を渡します:
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { defaultKeymap } from "@codemirror/commands";
+
+let state = EditorState.create({
+  doc: "Hello World",
+  extensions: [keymap.of(defaultKeymap)],
+});
+
+let view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```
+
+別途状態を作成せずに、すべてを `EditorView` のコンストラクタに直接渡すこともできます:
+
+```ts
+let view = new EditorView({
+  doc: "Hello World",
+  extensions: [keymap.of(defaultKeymap)],
+  parent: document.getElementById("editor"),
+});
+```
+
+このショートハンドを使用すると、View が内部的に `EditorState` を作成します。
+
+以下は `EditorView` で作成されたライブエディタです。入力してエディタの動作を確認してください:
+
+<HtmlPreview
+  title="Creating an EditorView"
+  height={280}
+  html={`<div id="editor"></div>`}
+  js={`
+    const state = CM.EditorState.create({
+      doc: "// Welcome to CodeMirror 6\\nfunction hello() {\\n  console.log(\\"Hello, world!\\");\\n}\\n\\nhello();\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+      ],
+    });
+
+    const view = new CM.EditorView({
+      state,
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { EditorState } from "@codemirror/state";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const state = EditorState.create({
+      doc: "// Welcome to CodeMirror 6\\nfunction hello() {\\n  console.log(\\"Hello, world!\\");\\n}\\n\\nhello();\\n",
+      extensions: [
+        basicSetup,
+        javascript(),
+      ],
+    });
+
+    const view = new EditorView({
+      state,
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## Transaction の dispatch
+
+`view.dispatch()` は状態変更を適用する方法です。1 つ以上の Transaction spec を受け取ります:
+
+```ts
+// Insert text at position 0
+view.dispatch({
+  changes: { from: 0, insert: "// " },
+});
+
+// Replace a range
+view.dispatch({
+  changes: { from: 0, to: 5, insert: "Goodbye" },
+});
+
+// Move the cursor
+view.dispatch({
+  selection: { anchor: 10 },
+});
+```
+
+`dispatch()` を呼び出すたびに、Transaction が作成され、新しい状態が生成され、DOM の影響を受けた部分が再レンダリングされます。
+
+単一の dispatch で複数の変更を組み合わせることができます:
+
+```ts
+view.dispatch({
+  changes: [
+    { from: 0, insert: "// " },
+    { from: 20, insert: "\n" },
+  ],
+});
+```
+
+<Note>
+
+`changes` 配列内の位置は、同じ配列内の先の変更が適用された後のドキュメントではなく、元のドキュメントを参照します。CodeMirror が内部的にオフセットの調整を処理します。
+
+</Note>
+
+## 状態へのアクセス
+
+現在の状態は常に `view.state` を通じて利用可能です:
+
+```ts
+console.log(view.state.doc.toString());
+console.log(view.state.selection.main.head);
+```
+
+Transaction を dispatch した後、`view.state` は新しい状態を反映します。
+
+## ViewPlugin と StateField の比較
+
+CodeMirror は、時間の経過に伴う状態を管理するための 2 種類の Extension を提供しています:
+
+- **StateField** は `EditorState` 内に存在します。純粋関数的で、Transaction を受け取って新しい値を計算します。DOM にはアクセスできません。
+- **ViewPlugin** は `EditorView` 上に存在します。DOM にアクセスし、ビューポートの変更に応答し、副作用を実行できます。View が更新されるたびに `update` オブジェクトを受け取ります。
+
+データがドキュメントの内容や Transaction から純粋に導出される場合は StateField を使用します。DOM アクセスやビューポートの変更への対応が必要な場合は ViewPlugin を使用します。
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+let myPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      // Runs once when the view is created
+      console.log("Editor mounted with", view.state.doc.length, "chars");
+    }
+
+    update(update) {
+      if (update.docChanged) {
+        console.log("Document changed");
+      }
+      if (update.viewportChanged) {
+        console.log("Viewport changed");
+      }
+    }
+
+    destroy() {
+      console.log("Plugin destroyed");
+    }
+  }
+);
+```
+
+ViewPlugin は Extension として追加します:
+
+```ts
+let view = new EditorView({
+  extensions: [myPlugin],
+  parent: document.body,
+});
+```
+
+## DOM イベントハンドラ
+
+`EditorView.domEventHandlers()` を使用して、エディタ上の DOM イベントのハンドラを登録します:
+
+```ts
+let handlers = EditorView.domEventHandlers({
+  click(event, view) {
+    console.log("Clicked at", event.clientX, event.clientY);
+    // Return true to indicate the event was handled
+    return false;
+  },
+  keydown(event, view) {
+    if (event.key === "Escape") {
+      console.log("Escape pressed");
+      return true;
+    }
+    return false;
+  },
+});
+
+let view = new EditorView({
+  extensions: [handlers],
+  parent: document.body,
+});
+```
+
+ハンドラから `true` を返すと、イベントのそれ以上の処理が防止されます。
+
+## テーマシステム
+
+CodeMirror 6 はスタイリングに CSS-in-JS アプローチを使用しています。テーマは `EditorView.theme()` と `EditorView.baseTheme()` で定義します。
+
+#### EditorView.theme()
+
+ベーステーマをオーバーライドする高い詳細度のセレクタを持つテーマ Extension を作成します:
+
+```ts
+let myTheme = EditorView.theme({
+  "&": {
+    fontSize: "14px",
+    border: "1px solid #ddd",
+  },
+  ".cm-content": {
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  "&.cm-focused .cm-cursor": {
+    borderLeftColor: "#528bff",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#f5f5f5",
+    borderRight: "1px solid #ddd",
+  },
+});
+
+let view = new EditorView({
+  extensions: [myTheme],
+  parent: document.body,
+});
+```
+
+`&` セレクタはエディタの外側の要素（`cm-editor` クラスを持つ要素）を参照します。
+
+#### EditorView.baseTheme()
+
+より低い詳細度のベーステーマを作成します。ベーステーマは、より高い優先度のテーマがオーバーライドできるデフォルトを提供します:
+
+```ts
+let baseStyles = EditorView.baseTheme({
+  ".cm-tooltip": {
+    border: "1px solid #ccc",
+    padding: "4px",
+  },
+});
+```
+
+Extension の作者は通常、ユーザーが `theme()` でスタイルをオーバーライドできるように `baseTheme()` を使用します。
+
+#### ダークモード
+
+`theme()` メソッドはテーマのバリアントを指定するための第 2 引数を受け取ります:
+
+```ts
+let darkTheme = EditorView.theme(
+  {
+    "&": {
+      backgroundColor: "#1e1e1e",
+      color: "#d4d4d4",
+    },
+  },
+  { dark: true }
+);
+```
+
+`{ dark: true }` が設定されている場合、エディタはルート要素に `cm-dark` クラスを追加し、ベーステーマがダークモード固有のスタイルを提供できるようにします。
+
+## コンテンツ属性
+
+`EditorView.contentAttributes` を使用して、エディタのコンテンツ要素に HTML 属性を追加します:
+
+```ts
+let attrs = EditorView.contentAttributes.of({
+  "aria-label": "Code editor",
+  spellcheck: "false",
+  autocorrect: "off",
+});
+```
+
+これは Facet なので、複数の Extension が属性を提供でき、それらがマージされます。
+
+## 行の折り返し
+
+デフォルトでは、CodeMirror は長い行に対して水平スクロールを使用します。`EditorView.lineWrapping` で行の折り返しを有効にします:
+
+```ts
+let view = new EditorView({
+  extensions: [EditorView.lineWrapping],
+  parent: document.body,
+});
+```
+
+## ビューのスクロール
+
+指定した位置が見えるようにエディタをスクロールするには、`scrollIntoView` を含む Transaction を dispatch します:
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+view.dispatch({
+  effects: EditorView.scrollIntoView(100),
+});
+```
+
+範囲を渡すこともできます:
+
+```ts
+view.dispatch({
+  effects: EditorView.scrollIntoView(100, { y: "center" }),
+});
+```
+
+## フォーカス管理
+
+エディタのフォーカスを確認・制御します:
+
+```ts
+// Check if the editor has focus
+console.log(view.hasFocus);
+
+// Programmatically focus the editor
+view.focus();
+```
+
+`view.dispatch()` を使用して選択範囲を設定した場合、エディタは自動的にフォーカスを取得しません。プログラムによる選択変更後にエディタにフォーカスが必要な場合は、`view.focus()` を呼び出してください。
+
+## Update リスナー
+
+ViewPlugin を作成せずに状態の更新に反応するには、`EditorView.updateListener` を使用します:
+
+```ts
+let listener = EditorView.updateListener.of((update) => {
+  if (update.docChanged) {
+    console.log("New content:", update.state.doc.toString());
+  }
+});
+```
+
+これは外部の状態をエディタと同期するための便利な方法です。
+
+## View の破棄
+
+ページからエディタを削除する際は、`destroy()` を呼び出してクリーンアップします:
+
+```ts
+view.destroy();
+```
+
+これにより、エディタの DOM が削除され、イベントリスナーがデタッチされ、すべての ViewPlugin の `destroy()` が呼び出されます。`destroy()` を呼び出した後は、View を使用しないでください。
+
+React や Vue などのフレームワークで作業している場合は、コンポーネントのクリーンアップフェーズ（例: `useEffect` のクリーンアップや `onUnmounted`）で `destroy()` を呼び出してください。

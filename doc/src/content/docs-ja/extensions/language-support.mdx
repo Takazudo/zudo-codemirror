@@ -1,0 +1,209 @@
+---
+title: 言語サポート
+description: "CodeMirror 6 における言語サポートの仕組み: 言語パッケージ、シンタックスハイライト、Markdown 内のコードブロックハイライト、言語固有の機能。"
+sidebar_position: 2
+---
+
+## 言語サポートの仕組み
+
+CodeMirror 6 では、言語サポートはコアエディタに組み込まれておらず、Extension を通じて提供されます。各言語は個別の npm パッケージとして提供され、以下を含みます。
+
+- 構文木を生成するパーサー（[Lezer](https://lezer.codemirror.net/) フレームワークに基づく）
+- 構文木のノードタイプをハイライトタグにマッピングするシンタックスハイライトルール
+- インデントルール、コードの折りたたみ、自動補完などの言語固有の機能
+
+言語サポートの Extension は、言語パッケージのメイン関数を呼び出すことで作成されます。返される `Extension` を `EditorState.create()` に渡します。
+
+```ts
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [javascript()];
+```
+
+内部的には、言語 Extension は `Language` インスタンス（Lezer パーサーをラップしたもの）と、インデント、折りたたみ、その他の言語固有の動作のための追加 Extension をバンドルしています。
+
+## @codemirror/lang-javascript
+
+JavaScript と TypeScript のサポートを提供します。JSX と TSX にも対応しています。
+
+```ts
+import { javascript } from "@codemirror/lang-javascript";
+
+// Plain JavaScript
+const jsExtensions = [javascript()];
+
+// TypeScript
+const tsExtensions = [javascript({ typescript: true })];
+
+// JSX
+const jsxExtensions = [javascript({ jsx: true })];
+
+// TypeScript + JSX (TSX)
+const tsxExtensions = [javascript({ typescript: true, jsx: true })];
+```
+
+このパッケージは `@codemirror/autocomplete` と組み合わせることで、JavaScript のグローバル変数やキーワードの自動補完を提供します。
+
+## @codemirror/lang-markdown
+
+Markdown の言語サポートを提供します。埋め込みコードブロックのハイライトにも対応しています。
+
+```ts
+import { markdown } from "@codemirror/lang-markdown";
+
+const extensions = [markdown()];
+```
+
+### markdownLanguage
+
+`markdownLanguage` オブジェクトは、Markdown の基本 `Language` インスタンスです。コードブロックのハイライトを設定する際に `base` オプションとして使用します。
+
+### コードブロックのハイライト
+
+Markdown のフェンスドコードブロックを各言語でハイライトするには、`codeLanguages` 配列を渡します。`@codemirror/language-data` パッケージが包括的な言語定義のリストを提供します。
+
+```ts
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+
+const extensions = [
+  markdown({
+    base: markdownLanguage,
+    codeLanguages: languages,
+  }),
+];
+```
+
+この設定により、以下のようなフェンスドコードブロックが適切な言語文法でパースされ、ハイライトされます。
+
+````markdown
+```js
+
+const x = 42;
+
+```
+
+```python
+
+x = 42
+
+```
+````
+
+`@codemirror/language-data` の `languages` 配列には `LanguageDescription` オブジェクトが含まれています。各定義はパーサーを必要に応じて遅延読み込みする方法を持っているため、ドキュメント内に実際に存在する言語のみが読み込まれます。
+
+## @codemirror/language-data
+
+このパッケージは、幅広い言語の `LanguageDescription` エントリを提供します。主に `@codemirror/lang-markdown` のコードブロックハイライトに使用されますが、ファイル名や MIME タイプに基づいて言語サポートを動的に読み込む用途にも使えます。
+
+```ts
+import { languages } from "@codemirror/language-data";
+
+// Find a language by name
+const jsLang = languages.find((l) => l.name === "JavaScript");
+
+// Find a language by file extension
+const pyLang = languages.find((l) =>
+  l.extensions.includes("py"),
+);
+```
+
+各 `LanguageDescription` には `load()` メソッドがあり、`Promise<LanguageSupport>` を返すため、遅延読み込みが可能です。
+
+```ts
+const lang = languages.find((l) => l.name === "Python");
+if (lang) {
+  const support = await lang.load();
+  // Use support.extension in your editor
+}
+```
+
+## 言語固有の機能
+
+### 自動補完
+
+言語パッケージは補完ソースを提供できます。たとえば、`@codemirror/lang-javascript` は JavaScript のグローバル変数の補完を含みます。使用するには、言語 Extension と一緒に `@codemirror/autocomplete` Extension を含めます。
+
+```ts
+import { autocompletion } from "@codemirror/autocomplete";
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [
+  javascript(),
+  autocompletion(),
+];
+```
+
+### リンティング
+
+言語パッケージは `@codemirror/lint` と統合して診断情報を表示できます。リンティングは言語パッケージ自体にはバンドルされていません。リンターを別途設定し、Extension として渡します。
+
+```ts
+import { linter, lintGutter } from "@codemirror/lint";
+import { javascript } from "@codemirror/lang-javascript";
+
+function myJsLinter(view) {
+  // Return an array of diagnostics
+  return [];
+}
+
+const extensions = [
+  javascript(),
+  linter(myJsLinter),
+  lintGutter(),
+];
+```
+
+### インデントと折りたたみ
+
+言語文法は構文木を通じてインデントルールと折りたたみ可能な領域を定義します。`@codemirror/language` の `indentOnInput()` や `foldGutter()` などの Extension は、アクティブな言語の構文木を使用してインデントレベルと折りたたみ境界を決定します。
+
+```ts
+import { indentOnInput, foldGutter } from "@codemirror/language";
+import { javascript } from "@codemirror/lang-javascript";
+
+const extensions = [
+  javascript(),
+  indentOnInput(),
+  foldGutter(),
+];
+```
+
+## 完全な Markdown エディタの例
+
+コードブロックのハイライト、括弧の対応、自動補完を備えた Markdown エディタの完全なセットアップです。
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
+import { bracketMatching, indentOnInput } from "@codemirror/language";
+import { closeBrackets } from "@codemirror/autocomplete";
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const state = EditorState.create({
+  doc: "# Hello\n\nWrite some **Markdown** here.",
+  extensions: [
+    lineNumbers(),
+    highlightActiveLine(),
+    history(),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    bracketMatching(),
+    closeBrackets(),
+    indentOnInput(),
+    highlightSelectionMatches(),
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: languages,
+    }),
+    EditorView.lineWrapping,
+  ],
+});
+
+const view = new EditorView({
+  state,
+  parent: document.getElementById("editor"),
+});
+```

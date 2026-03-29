@@ -1,0 +1,251 @@
+---
+title: テーマ
+description: "CodeMirror 6 でのテーマの作成と適用: EditorView.theme()、シンタックスカラーのための HighlightStyle、Lezer ハイライトタグ、コミュニティテーマパッケージ。"
+sidebar_position: 3
+---
+
+## テーマシステムの概要
+
+CodeMirror 6 のテーマには 2 つのレイヤーがあります。
+
+- **エディタテーマ** -- エディタ UI の外観を制御します。背景色、ガターのスタイル、カーソルの色、選択範囲の色、アクティブ行のハイライトなどの構造的な要素を設定します。`EditorView.theme()` で作成します。
+- **シンタックスハイライト** -- コード内のトークン（キーワード、文字列、コメントなど）に適用される色やスタイルを制御します。`HighlightStyle.define()` で作成し、`syntaxHighlighting()` で適用します。
+
+どちらも `EditorState.create()` に渡す Extension です。
+
+## EditorView.theme()
+
+`EditorView.theme()` は、CSS ルールのセットからエディタテーマの Extension を作成します。ルールはエディタインスタンスにスコープされた CSS セレクターを使用します。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const myTheme = EditorView.theme({
+  "&": {
+    color: "#333",
+    backgroundColor: "#fff",
+  },
+  ".cm-content": {
+    caretColor: "#333",
+  },
+  ".cm-gutters": {
+    backgroundColor: "#f5f5f5",
+    border: "none",
+  },
+  ".cm-activeLine": {
+    backgroundColor: "rgba(0, 0, 0, 0.04)",
+  },
+  ".cm-selectionBackground": {
+    backgroundColor: "#d7e4f2",
+  },
+});
+```
+
+`&` セレクターは `.cm-editor` ルート要素を参照します。その他のセレクターはすべて自動的にその下にスコープされます。
+
+### `dark` オプション
+
+テーマ作成時に `dark` オプションを渡すことで、暗い背景用に設計されたテーマであることを示せます。これはデフォルトスタイルに影響し、Extension が動作を適応させることを可能にします。
+
+```ts
+const darkTheme = EditorView.theme({
+  "&": {
+    color: "#e0e0e0",
+    backgroundColor: "#1e1e1e",
+  },
+}, { dark: true });
+```
+
+## EditorView.baseTheme()
+
+`EditorView.baseTheme()` はデフォルトスタイルを提供するベーステーマを作成します。ベーステーマは通常のテーマよりも優先度が低いため、オーバーライド可能なフォールバックスタイルとして機能します。
+
+```ts
+const baseTheme = EditorView.baseTheme({
+  ".cm-tooltip": {
+    border: "1px solid #ddd",
+    backgroundColor: "#f5f5f5",
+  },
+});
+```
+
+Extension の作者は通常、`baseTheme()` を使用して Extension にデフォルトスタイルを同梱します。これにより、そのまま使っても見た目が妥当でありながら、ユーザーのテーマでオーバーライドできるようになります。
+
+## よく使われる CSS セレクター
+
+CodeMirror 6 のテーマで使用される CSS セレクターの一覧です。
+
+- `&` -- `.cm-editor` ラッパー要素
+- `.cm-content` -- 編集可能なコンテンツ領域
+- `.cm-line` -- エディタ内の個々の行
+- `.cm-gutters` -- ガターのコンテナ（行番号、折りたたみマーカーなどを保持）
+- `.cm-gutter` -- 個々のガターカラム
+- `.cm-lineNumbers` -- 行番号ガター
+- `.cm-activeLine` -- カーソルがある行（`highlightActiveLine()` が有効な場合）
+- `.cm-activeLineGutter` -- アクティブ行のガター要素
+- `.cm-cursor, .cm-dropCursor` -- テキストカーソルとドロップカーソル
+- `.cm-selectionBackground` -- 選択テキストの背景
+- `.cm-focused .cm-selectionBackground` -- エディタがフォーカスされているときの選択背景
+- `.cm-tooltip` -- ツールチップのコンテナ（自動補完、ホバー情報）
+- `.cm-panels` -- パネル領域（検索パネルなど）
+- `.cm-foldGutter` -- 折りたたみガター
+- `.cm-foldPlaceholder` -- 折りたたまれた領域に表示されるプレースホルダー
+
+## シンタックスハイライトのための HighlightStyle
+
+`HighlightStyle.define()` は、Lezer のハイライトタグを CSS スタイルにマッピングするルールセットを作成します。各ルールはタグ（またはタグの配列）と適用するスタイルプロパティを指定します。
+
+```ts
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const myHighlightStyle = HighlightStyle.define([
+  { tag: tags.comment, color: "#6a9955" },
+  { tag: tags.keyword, color: "#569cd6" },
+  { tag: tags.string, color: "#ce9178" },
+  { tag: tags.number, color: "#b5cea8" },
+  { tag: tags.variableName, color: "#9cdcfe" },
+  { tag: tags.function(tags.variableName), color: "#dcdcaa" },
+  { tag: tags.typeName, color: "#4ec9b0" },
+  { tag: tags.operator, color: "#d4d4d4" },
+  { tag: tags.heading, fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: tags.link, textDecoration: "underline" },
+]);
+```
+
+### syntaxHighlighting()
+
+`HighlightStyle` をエディタに適用するには、`syntaxHighlighting()` でラップします。
+
+```ts
+const extensions = [syntaxHighlighting(myHighlightStyle)];
+```
+
+### @lezer/highlight のタグ
+
+`@lezer/highlight` の `tags` オブジェクトは、言語パーサーが使用するトークンカテゴリの標準セットを提供します。よく使われるタグは以下のとおりです。
+
+- `tags.comment` -- コメント
+- `tags.keyword` -- 言語キーワード（`if`、`else`、`return` など）
+- `tags.string` -- 文字列リテラル
+- `tags.number` -- 数値リテラル
+- `tags.bool` -- 真偽値リテラル
+- `tags.variableName` -- 変数名
+- `tags.function(tags.variableName)` -- 関数名（`variableName` に適用される修飾子）
+- `tags.definition(tags.variableName)` -- 変数定義
+- `tags.typeName` -- 型名
+- `tags.className` -- クラス名
+- `tags.propertyName` -- プロパティ名
+- `tags.operator` -- 演算子
+- `tags.punctuation` -- 句読点
+- `tags.heading` -- 見出し（Markdown 内）
+- `tags.emphasis` -- 強調テキスト
+- `tags.strong` -- 太字テキスト
+- `tags.link` -- リンク
+- `tags.url` -- URL
+
+`tags.function()` や `tags.definition()` のような修飾関数はサブタイプを作成します。`tags.function(tags.variableName)` は、言語パーサーによって関数名として使用されていると判定された変数名にマッチします。
+
+## CSS カスタムプロパティを使ったテーマの例
+
+CSS カスタムプロパティを使用することで、テーマを再構築せずにサイトのデザインシステムに合わせて CodeMirror テーマを適応させることができます。以下の例では、CSS 変数を使用した完全なテーマを作成しています。
+
+```ts
+import { EditorView } from "@codemirror/view";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const baseTheme = EditorView.theme({
+  "&": { color: "var(--fg)", backgroundColor: "var(--bg)" },
+  ".cm-content": { caretColor: "var(--cursor)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--cursor)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", border: "none" },
+  ".cm-activeLine": { backgroundColor: "rgba(0,0,0,0.04)" },
+}, { dark: true });
+
+const highlightStyle = HighlightStyle.define([
+  { tag: tags.comment, color: "var(--comment)" },
+  { tag: tags.keyword, color: "var(--keyword)" },
+  { tag: tags.string, color: "var(--string)" },
+  { tag: tags.number, color: "var(--number)" },
+  { tag: tags.function(tags.variableName), color: "var(--function)" },
+  { tag: tags.heading, color: "var(--heading)", fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: [tags.link, tags.url], textDecoration: "underline" },
+]);
+
+const theme = [baseTheme, syntaxHighlighting(highlightStyle)];
+```
+
+CSS カスタムプロパティは親要素または `:root` で定義します。
+
+```css
+:root {
+  --fg: #e0e0e0;
+  --bg: #1e1e1e;
+  --cursor: #aeafad;
+  --comment: #6a9955;
+  --keyword: #569cd6;
+  --string: #ce9178;
+  --number: #b5cea8;
+  --function: #dcdcaa;
+  --heading: #569cd6;
+}
+```
+
+以下は `oneDark` テーマを適用したライブエディタです:
+
+<HtmlPreview
+  title="One Dark Theme"
+  height={320}
+  html={`<div id="editor"></div>`}
+  js={`
+    const view = new CM.EditorView({
+      doc: '// One Dark theme example\\nconst API_URL = "https://api.example.com";\\n\\nasync function fetchUsers() {\\n  const response = await fetch(API_URL + "/users");\\n  const data = await response.json();\\n  return data.filter(user => user.active);\\n}\\n\\nfetchUsers().then(users => {\\n  console.log("Active users:", users.length);\\n});\\n',
+      extensions: [CM.basicSetup, CM.javascript(), CM.oneDark],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { javascript } from "@codemirror/lang-javascript";
+    import { oneDark } from "@codemirror/theme-one-dark";
+
+    const view = new EditorView({
+      doc: '// One Dark theme example\\nconst API_URL = "https://api.example.com";\\n\\nasync function fetchUsers() {\\n  const response = await fetch(API_URL + "/users");\\n  const data = await response.json();\\n  return data.filter(user => user.active);\\n}\\n\\nfetchUsers().then(users => {\\n  console.log("Active users:", users.length);\\n});\\n',
+      extensions: [basicSetup, javascript(), oneDark],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## コミュニティテーマパッケージ
+
+いくつかのコミュニティパッケージが事前構築されたテーマを提供しています。
+
+- `@uiw/codemirror-themes-all` -- 人気のテーマ（GitHub、Dracula、Solarized、Nord など）を CodeMirror 6 向けにパッケージしたコレクション
+- `@uiw/codemirror-theme-github` -- GitHub のライト/ダークテーマ
+- `@uiw/codemirror-theme-vscode` -- VS Code のダークテーマ
+- `thememirror` -- 人気エディタからポートされたテーマのコレクション
+
+コミュニティテーマの使用例:
+
+```ts
+import { EditorView } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { githubDark } from "@uiw/codemirror-theme-github";
+
+const state = EditorState.create({
+  doc: "const x = 42;",
+  extensions: [githubDark],
+});
+```
+
+<Note>
+
+コミュニティテーマパッケージはエディタテーマとシンタックスハイライトの両方をバンドルしているため、使用時に別途 `HighlightStyle` を追加する必要は通常ありません。
+
+</Note>

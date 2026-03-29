@@ -1,0 +1,228 @@
+---
+title: 組み込み Extension
+description: "CodeMirror 6 でよく使われる組み込み Extension: 行番号、アクティブ行のハイライト、選択一致、履歴、括弧処理、折りたたみなど。"
+sidebar_position: 1
+---
+
+## 概要
+
+CodeMirror 6 はテキストの描画以外の組み込み機能を持ちません。行番号、括弧の対応、アンドゥ/リドゥ、コードの折りたたみなど、すべての機能は Extension を通じて提供されます。このページでは、最もよく使われる組み込み Extension とその組み合わせ方を解説します。
+
+## lineNumbers()
+
+エディタの左側に行番号を表示するガターを追加します。
+
+```ts
+import { lineNumbers } from "@codemirror/view";
+
+const extensions = [lineNumbers()];
+```
+
+`formatNumber` オプションを渡すことで、行番号の表示形式をカスタマイズできます。
+
+```ts
+lineNumbers({
+  formatNumber: (n) => String(n).padStart(3, "0"),
+})
+```
+
+## highlightActiveLine()
+
+カーソルが現在位置する行に CSS クラス（`.cm-activeLine`）を適用してハイライトします。
+
+```ts
+import { highlightActiveLine } from "@codemirror/view";
+
+const extensions = [highlightActiveLine()];
+```
+
+## highlightSelectionMatches()
+
+テキストを選択すると、ドキュメント内の同じテキストの出現箇所をすべてハイライトします。
+
+```ts
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const extensions = [highlightSelectionMatches()];
+```
+
+## drawSelection()
+
+ブラウザのネイティブ選択をカスタム描画の選択に置き換えます。これにより、CodeMirror はカーソルと選択範囲の見た目を完全に制御でき、ブラウザ間で一貫した動作と複数カーソルのサポートが可能になります。
+
+```ts
+import { drawSelection } from "@codemirror/view";
+
+const extensions = [drawSelection()];
+```
+
+<Note>
+
+`drawSelection()` は `basicSetup` に含まれています。`basicSetup` を使用している場合、個別に追加する必要はありません。
+
+</Note>
+
+## scrollPastEnd()
+
+エディタの最終行を超えてスクロールできるようにします。この Extension がない場合、最終行は常にビューポートの下端に固定されるため、窮屈に感じることがあります。この Extension を使うと、最終行がエディタの上部に来るまでスクロールできます。
+
+```ts
+import { scrollPastEnd } from "@codemirror/view";
+
+const extensions = [scrollPastEnd()];
+```
+
+## history() と historyKeymap
+
+`history()` はアンドゥ/リドゥ機能を追加します。`historyKeymap` は標準のキーバインディング（アンドゥ: Ctrl-Z / Cmd-Z、リドゥ: Ctrl-Y / Cmd-Shift-Z）を提供します。
+
+```ts
+import { history, historyKeymap } from "@codemirror/commands";
+import { keymap } from "@codemirror/view";
+
+const extensions = [
+  history(),
+  keymap.of(historyKeymap),
+];
+```
+
+`history()` 関数は設定オブジェクトを受け取ります。
+
+```ts
+history({
+  minDepth: 100,  // Minimum number of undo events to keep (default: 100)
+  newGroupDelay: 500,  // Milliseconds after which a new undo group starts (default: 500)
+})
+```
+
+## closeBrackets()
+
+開き括弧を入力すると、自動的に閉じ括弧を挿入します。`()`、`[]`、`{}`、`""`、`''` に対応しています。
+
+```ts
+import { closeBrackets } from "@codemirror/autocomplete";
+
+const extensions = [closeBrackets()];
+```
+
+## bracketMatching()
+
+カーソルが括弧の隣にあるとき、対応する括弧をハイライトします。デフォルトでは `()`、`[]`、`{}` に対応しています。
+
+```ts
+import { bracketMatching } from "@codemirror/language";
+
+const extensions = [bracketMatching()];
+```
+
+## indentOnInput()
+
+再インデントをトリガーする文字（閉じ波括弧 `}` など）を入力すると、現在の行を再インデントします。言語のインデントルールに基づいて正しいインデントレベルが決定されます。
+
+```ts
+import { indentOnInput } from "@codemirror/language";
+
+const extensions = [indentOnInput()];
+```
+
+## foldGutter()
+
+折りたたみ可能なコードブロック（関数、クラス、オブジェクトなど）の横に、折りたたみ/展開マーカーを表示するガターを追加します。折りたたみはアクティブな言語の構文木によって決定されます。
+
+```ts
+import { foldGutter } from "@codemirror/language";
+
+const extensions = [foldGutter()];
+```
+
+## EditorView.lineWrapping
+
+ソフト改行（行の折り返し）を有効にする静的 Extension です。この Extension がない場合、長い行は表示領域を超えて伸び、水平スクロールが必要になります。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const extensions = [EditorView.lineWrapping];
+```
+
+<Tip>
+
+`EditorView.lineWrapping` は関数呼び出しではなく、事前に構築された Extension の値です。`()` なしでそのまま渡します。
+
+</Tip>
+
+## EditorView.updateListener
+
+すべての状態更新の後に実行されるコールバックを登録します。エディタ外部の変更に反応する場合（保存機構へのコンテンツ同期や外部 UI の更新など）に便利です。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const extensions = [
+  EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      console.log("Document changed:", update.state.doc.toString());
+    }
+  }),
+];
+```
+
+リスナーに渡される `ViewUpdate` オブジェクトには以下が含まれます。
+
+- `update.docChanged` -- ドキュメントが変更されたかどうか
+- `update.selectionSet` -- 選択範囲が変更されたかどうか
+- `update.state` -- 新しいエディタの状態
+- `update.startState` -- 更新前の状態
+- `update.changes` -- ドキュメントの変更内容（存在する場合）
+
+## Extension の組み合わせ
+
+Extension は配列であり、ネストしてもフラットに展開されます。これにより、関連する Extension を再利用可能なバンドルにグループ化するのが簡単になります。
+
+```ts
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { bracketMatching, indentOnInput, foldGutter } from "@codemirror/language";
+import { closeBrackets } from "@codemirror/autocomplete";
+import { highlightSelectionMatches } from "@codemirror/search";
+
+const coreExtensions = [
+  lineNumbers(),
+  highlightActiveLine(),
+  drawSelection(),
+  history(),
+  keymap.of([...defaultKeymap, ...historyKeymap]),
+];
+
+const editingExtensions = [
+  bracketMatching(),
+  closeBrackets(),
+  indentOnInput(),
+  foldGutter(),
+  highlightSelectionMatches(),
+];
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    coreExtensions,
+    editingExtensions,
+    EditorView.lineWrapping,
+  ],
+});
+```
+
+`codemirror` パッケージからエクスポートされる `basicSetup` は、これらの一般的な Extension をあらかじめ組み合わせたバンドルです。どの Extension を有効にするか完全に制御したい場合は、`basicSetup` の代わりに自分で組み合わせてください。
+
+```ts
+import { basicSetup } from "codemirror";
+
+// basicSetup includes: lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
+// history, foldGutter, drawSelection, dropCursor, allowMultipleSelections,
+// indentOnInput, syntaxHighlighting (defaultHighlightStyle), bracketMatching,
+// closeBrackets, autocompletion, rectangularSelection, crosshairCursor,
+// highlightActiveLine, highlightSelectionMatches, keymap.of([...closeBracketsKeymap,
+// ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap,
+// ...lintKeymap])
+```

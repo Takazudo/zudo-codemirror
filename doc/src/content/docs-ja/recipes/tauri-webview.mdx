@@ -1,0 +1,220 @@
+---
+title: Tauri / WebView との統合
+description: "Tauri や WebView ベースのデスクトップアプリケーションで CodeMirror 6 を実行するためのパターン: ズームの修正、フォーカス管理、ネイティブメニュー、ファイルシステム操作。"
+sidebar_position: 4
+---
+
+# Tauri / WebView との統合
+
+Tauri アプリ（または WebView ベースのデスクトップシェル）内で CodeMirror を実行すると、通常のブラウザ環境では発生しないプラットフォーム固有の問題が生じます。このページでは、最もよく見られる問題を取り上げます。
+
+## CSS ズームによるマウス座標の修正
+
+UI スケーリングを実装するために `document.body` に CSS `zoom` を使用する Tauri アプリでは、CodeMirror のマウス座標計算が壊れます。CodeMirror はマウスイベントの `clientX` と `clientY` を読み取ってカーソル位置を決定しますが、WebKit はこれらの値を CSS ズームに合わせて調整しません。その結果、エディタ内のクリックで誤った位置にカーソルが配置されます。ズームが `1` から離れるほどオフセットが大きくなります。
+
+修正方法として、エディタ上の `mousedown` と `mousemove` イベントをインターセプトし、現在のズーム係数で座標を除算して補正します。
+
+```ts
+import { Extension } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+function zoomMouseFix(): Extension {
+  const adjustForZoom = (event: MouseEvent) => {
+    const zoom = parseFloat(document.body.style.zoom || "1") || 1;
+    if (zoom === 1) return false;
+    Object.defineProperty(event, "clientX", {
+      value: event.clientX / zoom,
+      configurable: true,
+    });
+    Object.defineProperty(event, "clientY", {
+      value: event.clientY / zoom,
+      configurable: true,
+    });
+    return false;
+  };
+  return EditorView.domEventHandlers({
+    mousedown: adjustForZoom,
+    mousemove: adjustForZoom,
+  });
+}
+```
+
+ハンドラーは `false` を返すことで、CodeMirror が補正された座標でイベント処理を継続できるようにしています。
+
+<Warning>
+
+この問題は WebKit の CSS `zoom` の処理に固有のものです。Chromium ベースのブラウザ（および Electron）は CSS ズームの処理が異なるため、この修正が不要な場合があります。ターゲットプラットフォームでテストしてください。
+
+</Warning>
+
+## デスクトップアプリでのフォーカス管理
+
+デスクトップアプリはブラウザタブとは異なるフォーカスのセマンティクスを持ちます。Tauri アプリでは、ユーザーがネイティブ UI 要素（タイトルバーのボタン、ネイティブメニュー、システムダイアログ）を操作すると、WebView がフォーカスを失うことがあります。WebView にフォーカスが戻っても、エディタが自動的にフォーカスを再取得しない場合があります。
+
+Tauri のウィンドウフォーカスイベントを監視し、明示的にエディタにフォーカスすることで対処します。
+
+```ts
+import { listen } from "@tauri-apps/api/event";
+import { EditorView } from "@codemirror/view";
+
+async function setupFocusManagement(view: EditorView) {
+  await listen("tauri://focus", () => {
+    // Only refocus if the editor was the last focused element
+    if (document.activeElement === document.body) {
+      view.focus();
+    }
+  });
+}
+```
+
+アプリケーションに複数のフォーカス可能なパネル（サイドバー、ファイルツリー、設定）がある場合は、最後にフォーカスされたパネルを追跡し、正しいパネルにフォーカスを復元してください。
+
+### ウィンドウ表示時のフォーカス
+
+Tauri のウィンドウが非表示にされてから再表示される場合（たとえば、トレイベースのアプリケーション）、ウィンドウが表示された後にエディタにフォーカスする必要があります。
+
+```ts
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+const appWindow = getCurrentWindow();
+appWindow.listen("tauri://focus", () => {
+  // Small delay to ensure the WebView has fully rendered
+  requestAnimationFrame(() => {
+    view.focus();
+  });
+});
+```
+
+## ネイティブメニューとの統合
+
+Tauri アプリケーションには、編集メニュー項目（アンドゥ、リドゥ、カット、コピー、ペースト、全選択）を持つネイティブメニューバーがあることが多いです。これらのネイティブメニュー項目はブラウザレベルのイベントをディスパッチし、CodeMirror はカット、コピー、ペースト、全選択をネイティブに処理します。ただし、アンドゥとリドゥは特別な処理が必要です。CodeMirror はブラウザの組み込みアンドゥとは別に独自の履歴スタックを管理しているためです。
+
+Tauri のメニューイベントを監視し、対応する CodeMirror コマンドをディスパッチします。
+
+```ts
+import { listen } from "@tauri-apps/api/event";
+import { undo, redo } from "@codemirror/commands";
+
+async function setupMenuIntegration(view: EditorView) {
+  await listen("menu-undo", () => {
+    undo(view);
+  });
+
+  await listen("menu-redo", () => {
+    redo(view);
+  });
+
+  await listen("menu-save", () => {
+    const content = view.state.doc.toString();
+    onSave(content);
+  });
+}
+```
+
+<Note>
+
+ネイティブのカット/コピー/ペーストメニュー項目は、ブラウザのクリップボードイベントをトリガーするため、追加のコードなしで動作します。アンドゥ、リドゥ、およびアプリケーション固有のコマンド（保存、検索）のみにカスタムイベントリスナーが必要です。
+
+</Note>
+
+## ファイルシステム操作
+
+Tauri のエディタでは、ファイルの読み込みと保存は fetch や XMLHttpRequest ではなく、Tauri の IPC ブリッジを通じて行われます。
+
+### ファイルの読み込み
+
+```ts
+import { readTextFile } from "@tauri-apps/plugin-fs";
+
+async function loadFile(view: EditorView, filePath: string) {
+  const content = await readTextFile(filePath);
+  view.dispatch({
+    changes: {
+      from: 0,
+      to: view.state.doc.length,
+      insert: content,
+    },
+  });
+}
+```
+
+### ファイルの保存
+
+```ts
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+
+async function saveFile(view: EditorView, filePath: string) {
+  const content = view.state.doc.toString();
+  await writeTextFile(filePath, content);
+}
+```
+
+### ファイルダイアログとの統合
+
+Tauri のダイアログプラグインを使ってファイルピッカーダイアログを開きます。
+
+```ts
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+
+async function openFileDialog(view: EditorView) {
+  const filePath = await open({
+    multiple: false,
+    filters: [
+      { name: "Markdown", extensions: ["md", "mdx", "markdown"] },
+      { name: "Text", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+
+  if (typeof filePath === "string") {
+    const content = await readTextFile(filePath);
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: content,
+      },
+    });
+    return filePath;
+  }
+  return null;
+}
+
+async function saveFileDialog(view: EditorView) {
+  const filePath = await save({
+    filters: [
+      { name: "Markdown", extensions: ["md"] },
+      { name: "Text", extensions: ["txt"] },
+    ],
+  });
+
+  if (filePath) {
+    const content = view.state.doc.toString();
+    await writeTextFile(filePath, content);
+    return filePath;
+  }
+  return null;
+}
+```
+
+## キーバインディングの考慮事項
+
+デスクトップエディタでは通常、`Cmd-S` / `Ctrl-S` を保存にバインドします。Tauri アプリでは、このキーバインディングを CodeMirror レベル、Tauri メニューレベル、または両方で処理できます。両方で定義する場合、CodeMirror のキーマップが先にイベントをインターセプトし、`preventDefault()` を呼び出してネイティブメニューハンドラーへの伝播を止める必要があります。
+
+```ts
+import { keymap } from "@codemirror/view";
+
+const desktopKeymap = keymap.of([
+  {
+    key: "Mod-s",
+    run(view) {
+      const content = view.state.doc.toString();
+      onSave(content);
+      return true; // returning true prevents further handling
+    },
+  },
+]);
+```
+
+`Mod` は macOS では `Cmd`、その他のプラットフォームでは `Ctrl` にマッピングされます。

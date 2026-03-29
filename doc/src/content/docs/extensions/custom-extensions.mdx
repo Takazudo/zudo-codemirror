@@ -1,0 +1,322 @@
+---
+title: Custom Extensions
+description: "Building custom CodeMirror 6 extensions: ViewPlugin for DOM side effects, StateField for custom state, StateEffect for state updates, and Decorations."
+sidebar_position: 5
+---
+
+## Extension Building Blocks
+
+CodeMirror 6 provides several primitives for building custom extensions:
+
+- **ViewPlugin** -- Runs code in response to view updates, with access to the DOM
+- **StateField** -- Stores custom state that updates with each transaction
+- **StateEffect** -- Signals for triggering state changes from outside the normal document flow
+- **Decorations** -- Visual modifications to the editor (marks, widgets, line decorations, replacements)
+
+## ViewPlugin
+
+A `ViewPlugin` is attached to the view and can run side effects whenever the editor updates. It is the right tool for DOM interactions, scroll behavior, external synchronization, and anything that needs access to the `EditorView`.
+
+```ts
+import { ViewPlugin, ViewUpdate, EditorView } from "@codemirror/view";
+
+const myPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view: EditorView) {
+      // Initialization: called once when the editor mounts
+    }
+    update(update: ViewUpdate) {
+      // Called after every state update
+      if (update.docChanged) {
+        // React to document changes
+      }
+    }
+    destroy() {
+      // Cleanup: called when the editor unmounts
+    }
+  },
+);
+```
+
+The class receives the `EditorView` in its constructor and a `ViewUpdate` in its `update` method. The `destroy` method is called when the plugin is removed.
+
+### ViewPlugin with Decorations
+
+A `ViewPlugin` can provide decorations by specifying a `decorations` accessor:
+
+```ts
+import { ViewPlugin, Decoration, DecorationSet, EditorView } from "@codemirror/view";
+
+const highlightPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.buildDecorations(view);
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+    buildDecorations(view: EditorView) {
+      // Build and return a DecorationSet
+      return Decoration.none;
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+## StateField
+
+A `StateField` holds a piece of state that persists across transactions. It defines a `create` function (called when the editor initializes) and an `update` function (called with each transaction).
+
+```ts
+import { StateField, Transaction } from "@codemirror/state";
+
+const charCount = StateField.define<number>({
+  create(state) {
+    return state.doc.length;
+  },
+  update(value: number, tr: Transaction) {
+    if (tr.docChanged) {
+      return tr.state.doc.length;
+    }
+    return value;
+  },
+});
+```
+
+To read the field's value:
+
+```ts
+const count = view.state.field(charCount);
+```
+
+### StateField with Decorations
+
+A `StateField` can also provide decorations:
+
+```ts
+import { StateField } from "@codemirror/state";
+import { EditorView, Decoration, DecorationSet } from "@codemirror/view";
+
+const highlightField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    // Add or remove decorations based on effects
+    return decorations;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+```
+
+## StateEffect
+
+A `StateEffect` is a typed signal that can be attached to a transaction. State fields listen for effects in their `update` function to respond to events that are not document changes.
+
+```ts
+import { StateEffect, StateField } from "@codemirror/state";
+
+// Define an effect type
+const addHighlight = StateEffect.define<{ from: number; to: number }>();
+const removeHighlights = StateEffect.define<void>();
+
+// Listen for effects in a state field
+const highlights = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(addHighlight)) {
+        const { from, to } = effect.value;
+        value = value.update({
+          add: [highlightMark.range(from, to)],
+        });
+      }
+      if (effect.is(removeHighlights)) {
+        value = Decoration.none;
+      }
+    }
+    return value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// Dispatch an effect
+view.dispatch({
+  effects: addHighlight.of({ from: 0, to: 10 }),
+});
+```
+
+## Decorations
+
+Decorations modify how the editor content is displayed without changing the document itself. There are four types:
+
+### Mark Decorations
+
+Apply CSS classes or inline styles to a range of text:
+
+```ts
+import { Decoration } from "@codemirror/view";
+
+const highlight = Decoration.mark({
+  class: "cm-highlight",
+});
+
+// Create a range: highlight.range(from, to)
+```
+
+### Widget Decorations
+
+Insert a DOM element at a position in the editor:
+
+```ts
+import { Decoration, WidgetType, EditorView } from "@codemirror/view";
+
+class CheckboxWidget extends WidgetType {
+  toDOM(view: EditorView) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.setAttribute("aria-label", "Toggle");
+    return checkbox;
+  }
+}
+
+const widget = Decoration.widget({
+  widget: new CheckboxWidget(),
+  side: 1,  // 1 = after the position, -1 = before
+});
+```
+
+### Line Decorations
+
+Apply CSS classes or attributes to an entire line element:
+
+```ts
+const lineHighlight = Decoration.line({
+  class: "cm-highlighted-line",
+});
+```
+
+### Replace Decorations
+
+Replace a range of content with a widget or hide it entirely:
+
+```ts
+const fold = Decoration.replace({
+  widget: new PlaceholderWidget(),
+});
+```
+
+## Example: Typewriter Scrolling
+
+This `ViewPlugin` keeps the cursor vertically centered in the editor viewport. When the cursor moves beyond a tolerance zone around the center, the editor scrolls to re-center it.
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+function typewriterScrolling() {
+  return ViewPlugin.fromClass(
+    class {
+      private pendingFrame = 0;
+      update(update: ViewUpdate) {
+        if (!update.selectionSet && !update.docChanged) return;
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+        const view = update.view;
+        const { head } = view.state.selection.main;
+        this.pendingFrame = requestAnimationFrame(() => {
+          this.pendingFrame = 0;
+          const coords = view.coordsAtPos(head);
+          if (!coords) return;
+          const editorRect = view.dom.getBoundingClientRect();
+          const viewportHeight = editorRect.height;
+          const centerY = editorRect.top + viewportHeight / 2;
+          const cursorY = coords.top;
+          const tolerance = viewportHeight / 6;
+          if (Math.abs(cursorY - centerY) < tolerance) return;
+          view.scrollDOM.scrollTo({
+            top: view.scrollDOM.scrollTop + (cursorY - centerY),
+            behavior: "instant",
+          });
+        });
+      }
+      destroy() {
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+      }
+    },
+  );
+}
+```
+
+Key points:
+
+- Uses `requestAnimationFrame` to batch scroll updates and avoid layout thrashing
+- Checks both `selectionSet` and `docChanged` to respond to cursor movement and typing
+- Applies a tolerance zone (one-sixth of the viewport height) to avoid jittery scrolling on small movements
+- Cleans up the pending animation frame in `destroy()`
+
+## Example: Markdown List Continuation
+
+This extension adds an `Enter` key handler that automatically continues Markdown list items. When the user presses Enter at the end of a list line, it inserts the next list marker. When the current list item is empty, it removes the marker instead.
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+const listMarkerRe = /^(\s*)([-*+]|\d+\.)\s(\[[ xX]\]\s)?/;
+
+function getNextListMarker(lineText: string) {
+  const match = lineText.match(listMarkerRe);
+  if (!match) return null;
+  const [fullMatch, indent, marker, checkbox] = match;
+  const textAfterMarker = lineText.slice(fullMatch.length);
+  const isEmpty = textAfterMarker.trim() === "";
+  let nextMarker = marker;
+  if (/^\d+\./.test(marker)) {
+    nextMarker = `${parseInt(marker, 10) + 1}.`;
+  }
+  const nextCheckbox = checkbox ? "[ ] " : "";
+  return { prefix: `${indent}${nextMarker} ${nextCheckbox}`, isEmpty };
+}
+
+function markdownListIndent() {
+  return keymap.of([{
+    key: "Enter",
+    run(view) {
+      const { state } = view;
+      const { from, to } = state.selection.main;
+      if (from !== to) return false;
+      const line = state.doc.lineAt(from);
+      if (from !== line.to) return false;
+      const result = getNextListMarker(line.text);
+      if (!result) return false;
+      if (result.isEmpty) {
+        view.dispatch({ changes: { from: line.from, to: line.to, insert: "" } });
+        return true;
+      }
+      const newLine = `\n${result.prefix}`;
+      view.dispatch({
+        changes: { from, to: from, insert: newLine },
+        selection: { anchor: from + newLine.length },
+        scrollIntoView: true,
+      });
+      return true;
+    },
+  }]);
+}
+```
+
+Key points:
+
+- Returns `false` when the handler does not apply, allowing other keybindings to handle the event
+- Only activates when the cursor is at the end of a line with no selection
+- Increments numbered list markers automatically (`1.` becomes `2.`)
+- Preserves checkbox syntax (`- [ ]`) for task lists
+- Removes the list marker when the current item has no content (pressing Enter on an empty `- ` line clears the line)

@@ -1,0 +1,120 @@
+---
+title: Vim モードの概要
+description: CodeMirror 6 向けの @replit/codemirror-vim のセットアップと設定方法。
+sidebar_position: 1
+---
+
+# Vim モードの概要
+
+`@replit/codemirror-vim` は、CodeMirror 6 向けの主要な Vim エミュレーションパッケージです。Replit が開発したこのパッケージは、モーダル編集、モーション、オペレーター、テキストオブジェクト、レジスタ、マクロ、Ex コマンドなど、包括的な Vim 体験を CodeMirror エディター上で提供します。
+
+## インストール
+
+```bash
+pnpm add @replit/codemirror-vim
+```
+
+## 基本的なセットアップ
+
+エディター作成時に、extensions 配列に `vim()` を追加します。
+
+```ts
+import { EditorView, basicSetup } from "codemirror";
+import { vim } from "@replit/codemirror-vim";
+
+const view = new EditorView({
+  extensions: [
+    vim(),
+    basicSetup,
+  ],
+  parent: document.getElementById("editor")!,
+});
+```
+
+<Warning>
+
+extensions 配列では `vim()` を `basicSetup` よりも前に配置してください。Vim Extension はデフォルトのキーバインドよりも高い優先度でキー入力を処理する必要があるためです。
+
+</Warning>
+
+以下の Vim モードエディタを試してみてください。`Escape` で Normal モード、`i` で Insert モード、`hjkl` でナビゲーション、`:` で Ex コマンドを実行できます。下部のステータスバーに現在のモードが表示されます。
+
+<HtmlPreview
+  title="Vim Mode Editor"
+  height={320}
+  html={`<div id="editor"></div>`}
+  css={`
+    .cm-vim-panel { font-family: ui-monospace, monospace; font-size: 13px; padding: 2px 8px; }
+    .cm-editor { height: 270px; }
+  `}
+  js={`
+    const view = new CM.EditorView({
+      doc: "# Welcome to Vim Mode\\n\\nPress Escape for Normal mode, i for Insert mode.\\nUse h/j/k/l to navigate in Normal mode.\\n\\nTry these commands:\\n  dd    - delete a line\\n  yy    - yank (copy) a line\\n  p     - paste below\\n  /text - search for 'text'\\n  :set number - show line numbers\\n  u     - undo\\n",
+      extensions: [
+        CM.vim({ status: true }),
+        CM.basicSetup,
+        CM.markdown(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { vim } from "@replit/codemirror-vim";
+    import { markdown } from "@codemirror/lang-markdown";
+
+    const view = new EditorView({
+      doc: "# Welcome to Vim Mode\\n\\nPress Escape for Normal mode...",
+      extensions: [
+        vim({ status: true }),
+        basicSetup,
+        markdown(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+  `}
+/>
+
+## vim() 関数のオプション
+
+`vim()` 関数はオプションの設定オブジェクトを受け取ります。
+
+```ts
+vim({
+  status: true, // show a vim status indicator (mode display)
+})
+```
+
+- `status` -- `true` に設定すると、現在の Vim モード（Normal、Insert、Visual など）と入力途中のコマンドを表示するパネルが追加されます
+
+## 動作の仕組み
+
+Vim Extension は CodeMirror のデフォルトのキー入力処理をオーバーライドします。キーが押されると、以下のように処理されます。
+
+- Vim レイヤーが CodeMirror の組み込みキーマップ処理より先にイベントをインターセプトします
+- キー入力は内部の Vim コマンドパーサーに渡され、部分的なコマンド、カウント、レジスタが追跡されます
+- 現在のモードに応じて、パーサーはコマンドを実行するか、モードを遷移させるか、キー入力を CodeMirror にパススルーします
+
+この Extension は、モード管理、レジスタ、マーク、マクロ、コマンドラインバッファのために独自の内部状態を保持しています。Vim の操作は CodeMirror のトランザクション（選択、置換、ディスパッチ）に変換されてドキュメントに反映されます。
+
+## サポートされるモード
+
+`@replit/codemirror-vim` は以下の Vim モードをサポートしています。
+
+- **Normal** -- ナビゲーションやコマンド入力のためのデフォルトモード
+- **Insert** -- テキスト入力モード。`i`、`a`、`o` などのコマンドで切り替え
+- **Visual** -- 文字単位のビジュアル選択。`v` で切り替え
+- **Visual Line** -- 行単位のビジュアル選択。`V` で切り替え
+- **Visual Block** -- ブロック（矩形）ビジュアル選択。`Ctrl-v` で切り替え
+- **Replace** -- 上書きモード。`R` で切り替え
+- **Command-line (Ex)** -- Ex コマンド用。`:` で切り替え
+
+## Vim オブジェクトへのアクセス
+
+多くのカスタマイズ API は `Vim` オブジェクトに定義されており、個別にインポートします。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+このオブジェクトは、カスタム Ex コマンド、キーマッピング、オプション、レジスタ操作のためのメソッドを提供します。以降のページでそれぞれについて詳しく解説します。

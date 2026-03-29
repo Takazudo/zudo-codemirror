@@ -1,0 +1,169 @@
+---
+title: Ex コマンド
+description: "@replit/codemirror-vim の Ex コマンドラインモードのリファレンスとカスタムコマンドの定義方法。"
+sidebar_position: 3
+---
+
+# Ex コマンド
+
+Ex コマンドは Normal モードで `:` を押すことで入力します。エディターの下部にコマンドラインプロンプトが表示され、コマンドを入力して `Enter` で実行します。
+
+## 組み込み Ex コマンド
+
+### ファイルとバッファのコマンド
+
+| コマンド | 説明 |
+|---------|-------------|
+| `:w` | 書き込み（保存）。有用な動作を行うにはカスタムハンドラーが必要 -- 後述。 |
+| `:q` | 終了。カスタムハンドラーが必要。 |
+| `:wq` | 書き込みして終了 |
+| `:e {file}` | ファイルを編集（ブラウザ環境では制限あり） |
+
+<Note>
+
+`:w` と `:q` はブラウザエディターでは組み込みの動作がありません。`Vim.defineEx()` でカスタムハンドラーを定義して、アプリケーションの保存・終了ロジックに接続する必要があります。
+
+</Note>
+
+### キーマッピングコマンド
+
+| コマンド | 説明 |
+|---------|-------------|
+| `:map {lhs} {rhs}` | キーマッピングを作成（全モード） |
+| `:nmap {lhs} {rhs}` | Normal モードのマッピング |
+| `:imap {lhs} {rhs}` | Insert モードのマッピング |
+| `:vmap {lhs} {rhs}` | Visual モードのマッピング |
+| `:noremap {lhs} {rhs}` | 非再帰マッピング（全モード） |
+| `:nnoremap {lhs} {rhs}` | Normal モードの非再帰マッピング |
+| `:inoremap {lhs} {rhs}` | Insert モードの非再帰マッピング |
+| `:vnoremap {lhs} {rhs}` | Visual モードの非再帰マッピング |
+| `:unmap {lhs}` | マッピングを削除（全モード） |
+| `:nunmap {lhs}` | Normal モードのマッピングを削除 |
+| `:iunmap {lhs}` | Insert モードのマッピングを削除 |
+| `:vunmap {lhs}` | Visual モードのマッピングを削除 |
+
+### Set コマンド
+
+| コマンド | 説明 |
+|---------|-------------|
+| `:set number` | 行番号を表示 |
+| `:set nonumber` | 行番号を非表示 |
+| `:set wrap` | 行の折り返しを有効化（カスタムオプションの定義が必要 -- [Vim オプション](/docs-ja/vim-mode/options/)を参照） |
+| `:set nowrap` | 行の折り返しを無効化 |
+
+### テキスト操作コマンド
+
+| コマンド | 説明 |
+|---------|-------------|
+| `:sort` | 選択範囲またはバッファ全体の行をソート |
+| `:s/pattern/replacement/flags` | 現在の行で置換 |
+| `:%s/pattern/replacement/flags` | バッファ全体で置換 |
+| `:g/pattern/command` | パターンにマッチする行でコマンドを実行 |
+
+#### 置換フラグ
+
+| フラグ | 説明 |
+|------|-------------|
+| `g` | 各行の全出現箇所を置換（最初の1つだけではなく） |
+| `i` | 大文字小文字を区別しないマッチング |
+| `c` | 各置換を確認 |
+
+#### 置換の例
+
+```
+:s/foo/bar/          substitute first 'foo' with 'bar' on current line
+:s/foo/bar/g         substitute all 'foo' with 'bar' on current line
+:%s/foo/bar/g        substitute all 'foo' with 'bar' in entire buffer
+:%s/foo/bar/gi       case-insensitive substitute in entire buffer
+:5,10s/foo/bar/g     substitute in lines 5 through 10
+```
+
+#### global コマンドの例
+
+```
+:g/TODO/d            delete all lines containing 'TODO'
+:g/^$/d              delete all blank lines
+:g/pattern/normal dd delete lines matching pattern using normal mode command
+```
+
+### 情報コマンド
+
+| コマンド | 説明 |
+|---------|-------------|
+| `:marks` | 現在のマークの一覧を表示 |
+| `:registers` | レジスタの内容を表示 |
+
+## カスタム Ex コマンドの定義
+
+`Vim.defineEx()` を使って Ex コマンドのハンドラーを登録します。これにより `:w`、`:q` などのコマンドをアプリケーション内で機能させることができます。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+### Vim.defineEx() のシグネチャ
+
+```ts
+Vim.defineEx(name: string, prefix: string, handler: (cm: any, params: any) => void): void
+```
+
+- `name` -- 完全なコマンド名（例: `"write"`）
+- `prefix` -- 短縮エイリアス（例: `"w"`）
+- `handler` -- 実行する関数。CodeMirror アダプターインスタンスとパラメータオブジェクトを受け取ります。
+
+### :w（書き込み/保存）の実装
+
+```ts
+Vim.defineEx("write", "w", function (cm, params) {
+  // Your save logic here
+  const content = cm.getValue();
+  saveToServer(content);
+});
+```
+
+### :q（終了）の実装
+
+```ts
+Vim.defineEx("quit", "q", function (cm, params) {
+  // Your close/quit logic here
+  closeEditor();
+});
+```
+
+### :wq（書き込みして終了）の実装
+
+```ts
+Vim.defineEx("wquit", "wq", function (cm, params) {
+  const content = cm.getValue();
+  saveToServer(content).then(() => {
+    closeEditor();
+  });
+});
+```
+
+### 引数を受け取るカスタムコマンド
+
+`params` オブジェクトからコマンドライン引数にアクセスできます。
+
+```ts
+Vim.defineEx("theme", "theme", function (cm, params) {
+  const themeName = params.args?.[0];
+  if (themeName) {
+    applyTheme(themeName);
+  }
+});
+```
+
+これにより、Vim コマンドラインから `:theme dark` や `:theme light` を実行できます。
+
+### 範囲を受け取るカスタムコマンド
+
+行範囲を操作する Ex コマンドは、`params` で範囲情報を受け取ります。
+
+```ts
+Vim.defineEx("upper", "upper", function (cm, params) {
+  const { line: start } = params.line ?? { line: 0 };
+  const { line: end } = params.lineEnd ?? { line: cm.lineCount() - 1 };
+  // Operate on lines start through end
+});
+```

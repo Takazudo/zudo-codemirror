@@ -1,0 +1,180 @@
+---
+title: カスタムキーマッピング
+description: "@replit/codemirror-vim でカスタム Vim キーマッピング、リーダーキー、モード別バインドを定義する方法。"
+sidebar_position: 4
+---
+
+# カスタムキーマッピング
+
+`@replit/codemirror-vim` は、Vim スタイルのキーマッピングを定義するためのプログラマティック API を提供します。これらは `:map` や `:noremap` の Ex コマンドと同様に動作しますが、JavaScript/TypeScript から呼び出します。
+
+## コアマッピング API
+
+すべてのマッピング関数は `Vim` オブジェクトのメソッドです。
+
+```ts
+import { Vim } from "@replit/codemirror-vim";
+```
+
+### Vim.map()
+
+再帰的なキーマッピングを作成します。`{rhs}` 自体がマッピングされたシーケンスである場合、そのマッピングが展開されます。
+
+```ts
+Vim.map(lhs: string, rhs: string, mode?: string): void
+```
+
+### Vim.noremap()
+
+非再帰的なキーマッピングを作成します。`{rhs}` は生のキーとして解釈され、他のマッピングによる展開は行われません。
+
+```ts
+Vim.noremap(lhs: string, rhs: string, mode?: string): void
+```
+
+### Vim.unmap()
+
+以前に定義したマッピングを削除します。
+
+```ts
+Vim.unmap(lhs: string, mode?: string): void
+```
+
+## mode パラメータ
+
+オプションの `mode` パラメータを使って、マッピングを特定の Vim モードに制限できます。
+
+| 値 | モード |
+|-------|------|
+| `"normal"` | Normal モード |
+| `"insert"` | Insert モード |
+| `"visual"` | Visual モード |
+| （省略） | 全モード |
+
+## キー表記
+
+キーシーケンスでは、特殊キーに Vim スタイルの表記を使用します。
+
+| 表記 | キー |
+|----------|-----|
+| `<Esc>` | Escape |
+| `<CR>` | Enter / Return |
+| `<Tab>` | Tab |
+| `<Space>` | Space |
+| `<BS>` | Backspace |
+| `<C-w>` | Ctrl+w |
+| `<C-d>` | Ctrl+d |
+| `<A-x>` | Alt+x |
+| `<S-Tab>` | Shift+Tab |
+| `<Leader>` | リーダーキー（設定可能、デフォルトは `\`） |
+
+## 実用的な例
+
+### jk で Insert モードから抜ける
+
+Escape キーに手を伸ばさずに済む定番のマッピングです。
+
+```ts
+Vim.map("jk", "<Esc>", "insert");
+```
+
+### リーダーキーの組み合わせ
+
+リーダーキーを設定し、リーダーベースのショートカットを定義します。
+
+```ts
+// Set leader to space
+Vim.map("<Space>", "<Leader>");
+
+// Leader+w to write
+Vim.map("<Leader>w", ":w<CR>");
+
+// Leader+q to quit
+Vim.map("<Leader>q", ":q<CR>");
+```
+
+### Insert モードでのウィンドウ風ショートカット
+
+```ts
+// Ctrl+s to save from insert mode
+Vim.noremap("<C-s>", "<Esc>:w<CR>a", "insert");
+```
+
+### ナビゲーションキーの再マッピング
+
+```ts
+// Make H and L go to start/end of line
+Vim.noremap("H", "^", "normal");
+Vim.noremap("L", "$", "normal");
+```
+
+### Ex コマンドへのマッピング
+
+`:` を含むマッピングはコマンドラインモードに入り、Ex コマンドを実行できます。
+
+```ts
+// Clear search highlighting with leader+h
+Vim.map("<Leader>h", ":nohlsearch<CR>");
+
+// Sort selection with leader+s
+Vim.map("<Leader>s", ":sort<CR>", "visual");
+```
+
+### 行の上下移動
+
+```ts
+Vim.noremap("<A-j>", ":m .+1<CR>", "normal");
+Vim.noremap("<A-k>", ":m .-2<CR>", "normal");
+```
+
+## リーダーキーの設定
+
+リーダーキーは、カスタムマッピングで使用する設定可能なプレフィックスです。デフォルトのリーダーは `\`（バックスラッシュ）です。
+
+リーダーキーを変更するには:
+
+```ts
+Vim.map("<Space>", "<Leader>");
+```
+
+これ以降、`<Leader>` を使うすべてのマッピングは、Space に続くキーで応答するようになります。
+
+<Warning>
+
+`Vim.map` によるリーダーキーの設定は、`<Leader>` を使うマッピングを定義する前に行う必要があります。そうしないと、先に定義されたマッピングは古いリーダーキーのままになります。
+
+</Warning>
+
+## マッピングの削除
+
+不要になったマッピングを削除します。
+
+```ts
+// Remove the jk mapping in insert mode
+Vim.unmap("jk", "insert");
+
+// Remove a normal mode mapping
+Vim.unmap("H", "normal");
+```
+
+## 再帰マッピングと非再帰マッピング
+
+ほとんどの場合は `Vim.noremap()` を使用してください。
+
+- `Vim.map()` -- 右辺が既存のマッピングを通じて展開されるため、注意しないと無限ループを引き起こす可能性があります
+- `Vim.noremap()` -- 右辺はリテラルなキーストロークとして扱われ、意図しない連鎖を防ぎます
+
+```ts
+// Safe: noremap prevents recursive expansion
+Vim.noremap("j", "gj", "normal");
+Vim.noremap("k", "gk", "normal");
+
+// Dangerous with map: if gj were also mapped, this could loop
+// Vim.map("j", "gj", "normal"); // avoid this pattern
+```
+
+<Tip>
+
+`.vimrc` でのベストプラクティスと同様に、再帰的な展開が明確に必要な場合を除き、`map` / `nmap` / `imap` / `vmap` よりも `noremap` / `nnoremap` / `inoremap` / `vnoremap` を優先してください。
+
+</Tip>

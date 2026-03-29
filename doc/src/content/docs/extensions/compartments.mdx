@@ -1,0 +1,367 @@
+---
+title: Dynamic Configuration
+description: "Using Compartments to dynamically swap extensions at runtime in CodeMirror 6: toggling features, switching themes, and runtime reconfiguration."
+sidebar_position: 6
+---
+
+## Compartments
+
+In CodeMirror 6, extensions are normally fixed at the time you create the `EditorState`. A `Compartment` lets you change extensions after the editor is already running. You wrap an extension in a compartment, then later dispatch an effect to replace its contents.
+
+```ts
+import { Compartment } from "@codemirror/state";
+
+const myCompartment = new Compartment();
+```
+
+## Creating a Compartment
+
+A compartment wraps an initial extension value using its `of()` method. You pass the compartment's `of()` result as part of the extensions array when creating the state.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
+import { lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+
+const state = EditorState.create({
+  doc: "Hello",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+  ],
+});
+```
+
+## Reconfiguring a Compartment
+
+To change the extension inside a compartment at runtime, dispatch a transaction with a `reconfigure` effect:
+
+```ts
+// Remove the extension (pass an empty array)
+view.dispatch({
+  effects: lineNumberCompartment.reconfigure([]),
+});
+
+// Re-add the extension
+view.dispatch({
+  effects: lineNumberCompartment.reconfigure(lineNumbers()),
+});
+```
+
+Passing an empty array `[]` effectively disables the extension. Passing a new extension replaces whatever was there before.
+
+## Example: Toggling Line Numbers
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
+import { EditorView, lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+let lineNumbersEnabled = true;
+
+const state = EditorState.create({
+  doc: "Toggle line numbers on and off.",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+  ],
+});
+
+const view = new EditorView({ state, parent: document.getElementById("editor") });
+
+function toggleLineNumbers() {
+  lineNumbersEnabled = !lineNumbersEnabled;
+  view.dispatch({
+    effects: lineNumberCompartment.reconfigure(
+      lineNumbersEnabled ? lineNumbers() : [],
+    ),
+  });
+}
+```
+
+Try toggling line numbers on and off using the button below:
+
+<HtmlPreview
+  title="Toggle Line Numbers"
+  height={300}
+  html={`<div style="margin-bottom: 8px;"><button id="toggle-btn" style="padding: 4px 12px; cursor: pointer;">Toggle Line Numbers</button> <span id="status">Line numbers: ON</span></div><div id="editor"></div>`}
+  js={`
+    const lineNumberCompartment = new CM.Compartment();
+    let lineNumbersEnabled = true;
+
+    const view = new CM.EditorView({
+      doc: 'function hello() {\\n  console.log("Hello, world!");\\n}\\n\\nfunction add(a, b) {\\n  return a + b;\\n}\\n\\nhello();\\nconsole.log(add(2, 3));\\n',
+      extensions: [
+        CM.minimalSetup,
+        CM.highlightActiveLine(),
+        CM.bracketMatching(),
+        CM.foldGutter(),
+        lineNumberCompartment.of(CM.lineNumbers()),
+        CM.javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("toggle-btn").addEventListener("click", () => {
+      lineNumbersEnabled = !lineNumbersEnabled;
+      view.dispatch({
+        effects: lineNumberCompartment.reconfigure(
+          lineNumbersEnabled ? CM.lineNumbers() : []
+        ),
+      });
+      document.getElementById("status").textContent =
+        "Line numbers: " + (lineNumbersEnabled ? "ON" : "OFF");
+    });
+  `}
+  displayJs={`
+    import { EditorView, minimalSetup } from "codemirror";
+    import { Compartment } from "@codemirror/state";
+    import { lineNumbers, highlightActiveLine } from "@codemirror/view";
+    import { bracketMatching, foldGutter } from "@codemirror/language";
+    import { javascript } from "@codemirror/lang-javascript";
+
+    const lineNumberCompartment = new Compartment();
+    let lineNumbersEnabled = true;
+
+    // Use minimalSetup (no built-in lineNumbers) so compartment has full control
+    const view = new EditorView({
+      doc: 'function hello() {\\n  ...',
+      extensions: [
+        minimalSetup,
+        highlightActiveLine(),
+        bracketMatching(),
+        foldGutter(),
+        lineNumberCompartment.of(lineNumbers()),
+        javascript(),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("toggle-btn").addEventListener("click", () => {
+      lineNumbersEnabled = !lineNumbersEnabled;
+      view.dispatch({
+        effects: lineNumberCompartment.reconfigure(
+          lineNumbersEnabled ? lineNumbers() : []
+        ),
+      });
+      document.getElementById("status").textContent =
+        "Line numbers: " + (lineNumbersEnabled ? "ON" : "OFF");
+    });
+  `}
+/>
+
+## Example: Switching Between Themes
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+const themeCompartment = new Compartment();
+
+const lightTheme = EditorView.theme({
+  "&": { backgroundColor: "#ffffff", color: "#333333" },
+  ".cm-gutters": { backgroundColor: "#f0f0f0" },
+});
+
+const darkTheme = EditorView.theme({
+  "&": { backgroundColor: "#1e1e1e", color: "#d4d4d4" },
+  ".cm-gutters": { backgroundColor: "#252526" },
+}, { dark: true });
+
+const state = EditorState.create({
+  doc: "Switch between light and dark.",
+  extensions: [
+    themeCompartment.of(lightTheme),
+  ],
+});
+
+const view = new EditorView({ state, parent: document.getElementById("editor") });
+
+function setTheme(dark: boolean) {
+  view.dispatch({
+    effects: themeCompartment.reconfigure(dark ? darkTheme : lightTheme),
+  });
+}
+```
+
+Click the "Toggle Theme" button to switch between a light theme and the `oneDark` theme at runtime using a compartment:
+
+<HtmlPreview
+  title="Toggle Theme with Compartment"
+  height={320}
+  html={`<div style="margin-bottom: 8px;"><button id="theme-btn" style="padding: 4px 12px; cursor: pointer;">Toggle Theme</button> <span id="theme-status">Theme: light</span></div><div id="editor"></div>`}
+  js={`
+    const themeCompartment = new CM.Compartment();
+    let isDark = false;
+
+    const lightTheme = CM.EditorView.theme({
+      "&": { backgroundColor: "#ffffff" },
+    });
+
+    const view = new CM.EditorView({
+      doc: "// Toggle between light and dark themes\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nfor (let i = 0; i < 10; i++) {\\n  console.log(fibonacci(i));\\n}\\n",
+      extensions: [
+        CM.basicSetup,
+        CM.javascript(),
+        themeCompartment.of(lightTheme),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("theme-btn").addEventListener("click", () => {
+      isDark = !isDark;
+      view.dispatch({
+        effects: themeCompartment.reconfigure(
+          isDark ? CM.oneDark : lightTheme
+        ),
+      });
+      document.getElementById("theme-status").textContent =
+        "Theme: " + (isDark ? "oneDark" : "light");
+    });
+  `}
+  displayJs={`
+    import { EditorView, basicSetup } from "codemirror";
+    import { Compartment } from "@codemirror/state";
+    import { javascript } from "@codemirror/lang-javascript";
+    import { oneDark } from "@codemirror/theme-one-dark";
+
+    const themeCompartment = new Compartment();
+    let isDark = false;
+
+    const lightTheme = EditorView.theme({
+      "&": { backgroundColor: "#ffffff" },
+    });
+
+    const view = new EditorView({
+      doc: "// Toggle between light and dark themes\\nfunction fibonacci(n) {\\n  if (n <= 1) return n;\\n  return fibonacci(n - 1) + fibonacci(n - 2);\\n}\\n\\nfor (let i = 0; i < 10; i++) {\\n  console.log(fibonacci(i));\\n}\\n",
+      extensions: [
+        basicSetup,
+        javascript(),
+        themeCompartment.of(lightTheme),
+      ],
+      parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("theme-btn").addEventListener("click", () => {
+      isDark = !isDark;
+      view.dispatch({
+        effects: themeCompartment.reconfigure(
+          isDark ? oneDark : lightTheme
+        ),
+      });
+      document.getElementById("theme-status").textContent =
+        "Theme: " + (isDark ? "oneDark" : "light");
+    });
+  `}
+/>
+
+## Example: Toggling Vim Mode
+
+The `@replit/codemirror-vim` package provides vim keybindings. Wrapping it in a compartment lets users enable or disable vim mode at runtime.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { vim } from "@replit/codemirror-vim";
+
+const vimCompartment = new Compartment();
+let vimEnabled = false;
+
+// Initial setup: vim off
+const extensions = [
+  vimCompartment.of([]),
+];
+
+function toggleVim() {
+  vimEnabled = !vimEnabled;
+  view.dispatch({
+    effects: vimCompartment.reconfigure(
+      vimEnabled ? vim() : [],
+    ),
+  });
+}
+```
+
+<Warning>
+
+When toggling vim mode, the vim extension should be placed early in the extensions array so it can intercept key events before other keymaps.
+
+</Warning>
+
+## Example: Toggling Line Wrapping
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
+const wrapCompartment = new Compartment();
+
+// Initial setup with wrapping enabled
+const extensions = [
+  wrapCompartment.of(EditorView.lineWrapping),
+];
+
+// Toggle wrapping off
+view.dispatch({
+  effects: wrapCompartment.reconfigure([]),
+});
+
+// Toggle wrapping on
+view.dispatch({
+  effects: wrapCompartment.reconfigure(EditorView.lineWrapping),
+});
+```
+
+## Multiple Compartments
+
+You can use as many compartments as you need. Each one manages its own extension independently.
+
+```ts
+import { Compartment } from "@codemirror/state";
+import { EditorView, lineNumbers } from "@codemirror/view";
+
+const lineNumberCompartment = new Compartment();
+const wrapCompartment = new Compartment();
+const themeCompartment = new Compartment();
+
+const state = EditorState.create({
+  doc: "",
+  extensions: [
+    lineNumberCompartment.of(lineNumbers()),
+    wrapCompartment.of(EditorView.lineWrapping),
+    themeCompartment.of(myTheme),
+  ],
+});
+```
+
+You can reconfigure multiple compartments in a single dispatch by passing an array of effects:
+
+```ts
+view.dispatch({
+  effects: [
+    themeCompartment.reconfigure(darkTheme),
+    wrapCompartment.reconfigure([]),
+  ],
+});
+```
+
+## Checking Current Compartment Value
+
+You can check what extension a compartment currently holds using `compartment.get()`:
+
+```ts
+const currentExtension = lineNumberCompartment.get(view.state);
+```
+
+This returns the current extension value, which can be useful for determining the current state before toggling.
+
+## When to Use Compartments
+
+Compartments are the right tool when you need to:
+
+- Toggle features on and off at runtime (line numbers, wrapping, vim mode)
+- Switch between themes or highlight styles
+- Change language support when the user switches files
+- Update configuration based on user preferences
+
+For state that changes with every transaction (like a word count), use a `StateField` instead. Compartments are for swapping entire extensions, not for fine-grained state updates.
