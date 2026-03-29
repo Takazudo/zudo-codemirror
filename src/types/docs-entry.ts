@@ -28,6 +28,7 @@ export interface DocsEntry {
     hide_sidebar?: boolean;
     hide_toc?: boolean;
     standalone?: boolean;
+    generated?: boolean;
     slug?: string;
   };
   rendered?: RenderedContent;

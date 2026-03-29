@@ -29,7 +29,7 @@ export const settings = {
   trailingSlash: false as boolean,
   noindex: false as boolean,
   editUrl: false as string | false,
-  siteUrl: "" as string,
+  siteUrl: "https://takazudomodular.com" as string,
   docsDir: "src/content/docs",
   locales: {
     ja: { label: "JA", dir: "src/content/docs-ja" },
@@ -38,7 +38,7 @@ export const settings = {
   sitemap: false,
   docMetainfo: true,
   docTags: false,
-  llmsTxt: false,
+  llmsTxt: true,
   math: false,
   aiAssistant: false as boolean,
   docHistory: false,
@@ -67,5 +67,5 @@ export const settings = {
     { label: "Extensions", path: "/docs/extensions", categoryMatch: "extensions" },
     { label: "Recipes", path: "/docs/recipes", categoryMatch: "recipes" },
     { label: "Claude", path: "/docs/claude", categoryMatch: "claude" },
-  ] satisfies HeaderNavItem[],
+  ] as HeaderNavItem[],
 };
