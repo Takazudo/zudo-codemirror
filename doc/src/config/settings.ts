@@ -53,7 +53,10 @@ export const settings = {
   claudeResources: {
     claudeDir: ".claude",
   } as { claudeDir: string; projectRoot?: string } | false,
-  footer: false as FooterConfig | false,
+  footer: {
+    links: [],
+    copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>.`,
+  } satisfies FooterConfig,
   headerNav: [
     { label: "Getting Started", path: "/docs/getting-started", categoryMatch: "getting-started" },
     { label: "Core", path: "/docs/core", categoryMatch: "core" },
