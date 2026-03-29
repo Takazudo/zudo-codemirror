@@ -51,7 +51,7 @@ export const settings = {
     css: `.cm-editor { border: 1px solid #ddd; border-radius: 4px; }
 .cm-editor.cm-focused { outline: 2px solid #4a9eff; outline-offset: -1px; }
 .cm-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; }`,
-  } satisfies HtmlPreviewConfig,
+  } as HtmlPreviewConfig,
   versions: false as VersionConfig[] | false,
   claudeResources: {
     claudeDir: ".claude",
@@ -59,7 +59,7 @@ export const settings = {
   footer: {
     links: [],
     copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>. Enjoy synth on <a href="https://takazudomodular.com/">Takazudo Modular</a>.`,
-  } satisfies FooterConfig,
+  } as FooterConfig,
   headerNav: [
     { label: "Overview", path: "/docs/overview", categoryMatch: "overview" },
     { label: "Core", path: "/docs/core", categoryMatch: "core" },
