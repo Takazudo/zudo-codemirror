@@ -55,7 +55,7 @@ export const settings = {
   } as { claudeDir: string; projectRoot?: string } | false,
   footer: {
     links: [],
-    copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>.`,
+    copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>. Enjoy synth on <a href="https://takazudomodular.com/">Takazudo Modular</a>.`,
   } satisfies FooterConfig,
   headerNav: [
     { label: "Overview", path: "/docs/overview", categoryMatch: "overview" },
