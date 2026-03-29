@@ -47,8 +47,10 @@ export function remarkResolveMarkdownLinks(
   const onBrokenLinks = options.onBrokenLinks ?? "warn";
 
   return (tree: Root, file: { path?: string }) => {
-    // Rebuild source map on every call so new/removed files are picked up
-    // during dev server. The filesystem scan is fast (~1ms for typical doc sites).
+    // buildDocsSourceMap caches its result by options, so repeated calls
+    // during a single build (~56 files) reuse the first scan. The cache
+    // lives in module scope and resets naturally when the process restarts
+    // (i.e., each `astro build` or dev-server restart).
     const sourceMap = buildDocsSourceMap(options);
 
     const currentFilePath = file.path;

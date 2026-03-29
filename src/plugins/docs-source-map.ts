@@ -1,6 +1,19 @@
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
+/**
+ * Module-level cache for buildDocsSourceMap results.
+ * Key: JSON-serialized options, Value: the computed Map.
+ * Avoids redundant filesystem scans when called repeatedly with
+ * identical options during a single build (~56 calls).
+ */
+let sourceMapCache: Map<string, Map<string, string>> = new Map();
+
+/** Clear the cached source map. Useful between builds or in dev mode. */
+export function clearDocsSourceMapCache(): void {
+  sourceMapCache = new Map();
+}
+
 export interface DocsSourceMapOptions {
   /** Absolute root directory of the project */
   rootDir: string;
@@ -23,6 +36,12 @@ export interface DocsSourceMapOptions {
 export function buildDocsSourceMap(
   options: DocsSourceMapOptions,
 ): Map<string, string> {
+  const cacheKey = JSON.stringify(options);
+  const cached = sourceMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const map = new Map<string, string>();
   const { rootDir, docsDir, locales, versions, base, trailingSlash } = options;
 
@@ -99,5 +118,6 @@ export function buildDocsSourceMap(
     }
   }
 
+  sourceMapCache.set(cacheKey, map);
   return map;
 }
