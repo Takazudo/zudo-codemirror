@@ -22,7 +22,9 @@ const groupedTree = groupSatelliteNodes(tree, categoryOrder);
 <DocLayout title={settings.siteName} lang="ja" hideSidebar hideToc>
   <!-- Hero: logo left, title+desc+links right, block centered -->
   <div class="flex justify-center mb-vsp-xl">
-    <div class="flex items-center gap-hsp-xl">
+    <div
+      class="flex flex-col items-center text-center gap-hsp-md lg:flex-row lg:text-left lg:gap-hsp-xl"
+    >
       <div
         class="w-[80%] aspect-square lg:h-[10.5rem] lg:w-[10.5rem] bg-fg shrink-0"
         style={`-webkit-mask: url(${logoUrl}) center/contain no-repeat; mask: url(${logoUrl}) center/contain no-repeat;`}
@@ -34,7 +36,9 @@ const groupedTree = groupSatelliteNodes(tree, categoryOrder);
         <p class="text-muted text-small mb-vsp-sm">
           {settings.siteDescription}
         </p>
-        <div class="flex items-center gap-hsp-md text-small">
+        <div
+          class="flex items-center justify-center lg:justify-start gap-hsp-md text-small"
+        >
           {
             overview && (
               <>
