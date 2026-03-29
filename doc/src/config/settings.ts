@@ -52,6 +52,7 @@ export const settings = {
   versions: false as VersionConfig[] | false,
   claudeResources: {
     claudeDir: ".claude",
+    projectRoot: "..",
   } as { claudeDir: string; projectRoot?: string } | false,
   footer: {
     links: [],
@@ -63,5 +64,6 @@ export const settings = {
     { label: "Vim Mode", path: "/docs/vim-mode", categoryMatch: "vim-mode" },
     { label: "Extensions", path: "/docs/extensions", categoryMatch: "extensions" },
     { label: "Recipes", path: "/docs/recipes", categoryMatch: "recipes" },
+    { label: "Claude", path: "/docs/claude", categoryMatch: "claude" },
   ] satisfies HeaderNavItem[],
 };
