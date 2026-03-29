@@ -36,7 +36,7 @@ export const settings = {
   } as Record<string, LocaleConfig>,
   mermaid: true,
   sitemap: false,
-  docMetainfo: false,
+  docMetainfo: true,
   docTags: false,
   llmsTxt: false,
   math: false,
