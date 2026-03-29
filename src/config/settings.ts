@@ -52,7 +52,6 @@ export const settings = {
   versions: false as VersionConfig[] | false,
   claudeResources: {
     claudeDir: ".claude",
-    projectRoot: "..",
   } as { claudeDir: string; projectRoot?: string } | false,
   footer: {
     links: [],

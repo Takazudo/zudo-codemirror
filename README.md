@@ -17,7 +17,7 @@ Built with [zudo-doc](https://takazudomodular.com/pj/zudo-doc).
 ```bash
 pnpm install
 pnpm dev        # http://localhost:8847/pj/zudo-codemirror/
-pnpm build      # Static build to doc/dist/
+pnpm build      # Static build to dist/
 ```
 
 ## License

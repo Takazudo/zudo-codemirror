@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT_DIR/doc/public/assets/cm6-bundle.min.js"
+OUT="$ROOT_DIR/public/assets/cm6-bundle.min.js"
 
 mkdir -p "$(dirname "$OUT")"
 

@@ -48,16 +48,16 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: cd doc && pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build site
-        run: cd doc && pnpm build
+        run: pnpm build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: dist-out
-          path: doc/dist/
+          path: dist/
           retention-days: 1
 
   # ---------------------------------------------------------------------------
