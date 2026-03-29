@@ -1,0 +1,12 @@
+node_modules
+dist
+.astro
+__inbox/
+{logdir}/
+worktrees/
+.playwright-mcp/
+*.tgz
+*.log
+.env
+.env.*
+!.env.example

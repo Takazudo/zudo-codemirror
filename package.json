@@ -1,0 +1,46 @@
+{
+  "name": "takazudo-codemirror-wisdom",
+  "private": true,
+  "scripts": {
+    "// ── Doc site ────────────────────────────────────": "",
+    "predev": "lsof -ti :4321 | xargs kill 2>/dev/null; true",
+    "dev": "pnpm --dir doc dev",
+    "build": "pnpm --dir doc build",
+    "preview": "pnpm --dir doc preview",
+    "check": "pnpm --dir doc check",
+    "// ── CM6 bundle ──────────────────────────────────": "",
+    "build:cm6": "bash scripts/build-cm6-bundle.sh",
+    "// ── Code quality ────────────────────────────────": "",
+    "format:md": "pnpm dlx @takazudo/mdx-formatter --write 'doc/src/content/**/*.{md,mdx}'",
+    "format:md:check": "pnpm dlx @takazudo/mdx-formatter --check 'doc/src/content/**/*.{md,mdx}'",
+    "// ── Validation ──────────────────────────────────": "",
+    "b4push": "bash scripts/run-b4push.sh"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.10.0",
+    "@codemirror/lang-javascript": "^6.2.0",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.0",
+    "@codemirror/language-data": "^6.5.0",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/theme-one-dark": "^6.1.0",
+    "@codemirror/view": "^6.39.0",
+    "@lezer/highlight": "^1.2.0",
+    "@replit/codemirror-vim": "^6.3.0",
+    "codemirror": "^6.0.0",
+    "esbuild": "^0.25.0",
+    "lefthook": "^1.11.0"
+  },
+  "engines": {
+    "node": ">=20.0"
+  },
+  "packageManager": "pnpm@10.6.5",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "lefthook"
+    ]
+  }
+}
