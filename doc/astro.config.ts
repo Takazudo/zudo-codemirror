@@ -47,6 +47,7 @@ const shikiConfig = settings.colorMode
 export default defineConfig({
   output: "static",
   base: settings.base,
+  server: { port: 8847 },
   integrations: [
     mdx(),
     react(),

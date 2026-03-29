@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "// ── Doc site ────────────────────────────────────": "",
-    "predev": "lsof -ti :4321 | xargs kill 2>/dev/null; true",
+    "predev": "lsof -ti :8847 | xargs kill 2>/dev/null; true",
     "dev": "pnpm --dir doc dev",
     "build": "pnpm --dir doc build",
     "preview": "pnpm --dir doc preview",

@@ -58,7 +58,7 @@ export const settings = {
     copyright: `Copyright © ${new Date().getFullYear()} <a href="https://x.com/Takazudo">Takazudo</a>. Built with <a href="https://takazudomodular.com/pj/zudo-doc">zudo-doc</a>.`,
   } satisfies FooterConfig,
   headerNav: [
-    { label: "Getting Started", path: "/docs/getting-started", categoryMatch: "getting-started" },
+    { label: "Overview", path: "/docs/overview", categoryMatch: "overview" },
     { label: "Core", path: "/docs/core", categoryMatch: "core" },
     { label: "Vim Mode", path: "/docs/vim-mode", categoryMatch: "vim-mode" },
     { label: "Extensions", path: "/docs/extensions", categoryMatch: "extensions" },
