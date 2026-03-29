@@ -107,13 +107,13 @@ jobs:
 
       - name: Prepare deploy directory
         run: |
-          mkdir -p deploy/pj/codemirror-wisdom
+          mkdir -p deploy/pj/zudo-codemirror
           if [ -d dist-out/client ]; then
-            cp -r dist-out/client/. deploy/pj/codemirror-wisdom/
+            cp -r dist-out/client/. deploy/pj/zudo-codemirror/
           else
-            cp -r dist-out/. deploy/pj/codemirror-wisdom/
+            cp -r dist-out/. deploy/pj/zudo-codemirror/
           fi
-          echo '/ /pj/codemirror-wisdom/ 302' > deploy/_redirects
+          echo '/ /pj/zudo-codemirror/ 302' > deploy/_redirects
 
       - name: Deploy preview to Cloudflare Pages
         id: cf-deploy
@@ -121,12 +121,12 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
 
           npx wrangler@4 pages deploy deploy \
-            --project-name=takazudo-codemirror-wisdom \
+            --project-name=zudo-codemirror \
             --branch="pr-${PR_NUMBER}" \
             --commit-hash="${GITHUB_SHA}" \
             --commit-message="Preview: PR #${PR_NUMBER}"
 
-          DEPLOY_URL="https://pr-${PR_NUMBER}.takazudo-codemirror-wisdom.pages.dev"
+          DEPLOY_URL="https://pr-${PR_NUMBER}.zudo-codemirror.pages.dev"
           echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "Preview URL: $DEPLOY_URL"
         env:

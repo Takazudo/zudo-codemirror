@@ -23,9 +23,9 @@ export const settings = {
     darkScheme: "Default Dark",
     respectPrefersColorScheme: true,
   } satisfies ColorModeConfig,
-  siteName: "CodeMirror Wisdom",
-  siteDescription: "Comprehensive CodeMirror 6 knowledge base with vim mode focus" as string,
-  base: "/",
+  siteName: "zudo-codemirror",
+  siteDescription: "Takazudo's personal CodeMirror 6 dev notes — not official documentation" as string,
+  base: "/pj/zudo-codemirror/",
   trailingSlash: false as boolean,
   noindex: false as boolean,
   editUrl: false as string | false,
@@ -44,7 +44,7 @@ export const settings = {
   docHistory: false,
   colorTweakPanel: false as boolean,
   htmlPreview: {
-    head: `<script src="/assets/cm6-bundle.min.js"></script>`,
+    head: `<script src="/pj/zudo-codemirror/assets/cm6-bundle.min.js"></script>`,
     css: `.cm-editor { border: 1px solid #ddd; border-radius: 4px; }
 .cm-editor.cm-focused { outline: 2px solid #4a9eff; outline-offset: -1px; }
 .cm-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; }`,

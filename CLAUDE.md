@@ -1,6 +1,6 @@
-# CodeMirror Wisdom
+# zudo-codemirror
 
-Comprehensive CodeMirror 6 knowledge base with vim mode focus, built with zudo-doc (Astro 6).
+Takazudo's personal CodeMirror 6 dev notes, built with zudo-doc (Astro 6). Base path: `/pj/zudo-codemirror/`.
 
 ## Architecture
 
@@ -36,6 +36,7 @@ pnpm b4push       # Pre-push validation (cm6 bundle + format + typecheck + build
 ## MDX Components
 
 Available globally in MDX without imports:
+
 - `<Note>`, `<Tip>`, `<Info>`, `<Warning>`, `<Danger>` - Admonitions
 - `<HtmlPreview>` - Interactive HTML/CSS/JS preview with code display
 
