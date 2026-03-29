@@ -10,6 +10,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { colorSchemes } from "./src/config/color-schemes";
 import { settings } from "./src/config/settings";
 import { claudeResourcesIntegration } from "./src/integrations/claude-resources";
+import { docHistoryIntegration } from "./src/integrations/doc-history";
 import { searchIndexIntegration } from "./src/integrations/search-index";
 import remarkDirective from "remark-directive";
 import { remarkAdmonitions } from "./src/plugins/remark-admonitions";
@@ -52,6 +53,7 @@ export default defineConfig({
     mdx(),
     react(),
     searchIndexIntegration(),
+    ...(settings.docHistory ? [docHistoryIntegration()] : []),
     ...(settings.claudeResources
       ? [claudeResourcesIntegration(settings.claudeResources)]
       : []),

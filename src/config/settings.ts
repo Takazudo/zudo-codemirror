@@ -41,7 +41,7 @@ export const settings = {
   llmsTxt: true,
   math: false,
   aiAssistant: false as boolean,
-  docHistory: false,
+  docHistory: true,
   sidebarResizer: true,
   sidebarToggle: true,
   onBrokenMarkdownLinks: "warn" as string,
