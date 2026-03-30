@@ -1,0 +1,247 @@
+---
+title: Split Pane Content Sync
+description: Battle-tested strategies for managing content across multiple CodeMirror editors in a split pane layout. Covers measure loop prevention, cursor preservation, debounced cross-pane sync, and WKWebView-specific pitfalls.
+sidebar_position: 6
+---
+
+# Split Pane Content Sync
+
+When multiple CodeMirror editors share a viewport (e.g., split pane layout), three critical problems emerge:
+
+1. **Measure loop thrashing** — Two editors competing for layout space trigger CodeMirror's measurement loop to restart ("Measure loop restarted more than 5 times")
+2. **Cursor position reset** — Content round-tripping through React state causes full document replacement that resets the cursor
+3. **WKWebView "Paste" tooltip** — `navigator.clipboard.readText()` on focusin triggers the native macOS editing menu
+
+## The Root Cause: Per-Keystroke React Re-renders
+
+The standard React integration pattern uses a content sync effect:
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+  }
+}, [content]);
+```
+
+This works for a single editor. With split panes sharing the same draft, the problem chain is:
+
+1. User types in focused editor → `onChange` fires
+2. `onChange` calls `setFocusedContent(newContent)` (React state)
+3. React re-renders → content prop flows to **both** panes
+4. Focused pane: `currentDoc === content` → no dispatch (safe)
+5. Non-focused pane: `currentDoc !== content` → full document replacement
+6. The replacement triggers CodeMirror re-measurement → conflicts with focused editor → **measure loop**
+
+The cursor reset variant: if the React state update arrives while the user is still typing (race condition), the focused pane sees `currentDoc !== content` and replaces the document, resetting cursor to position 0.
+
+## Solution: Debounced Content Tick (No Per-Keystroke State Updates)
+
+The key insight: **do NOT update React state on every keystroke**. Store content in a ref (for auto-save), and use a debounced state counter to trigger cross-pane sync.
+
+```tsx
+// In the shared draft store
+const contentMapRef = useRef(new Map<number, string>());
+const [, setContentTick] = useState(0);
+const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+const setContentForPane = useCallback((paneId: string, content: string) => {
+  // Update ref immediately (no React re-render)
+  contentMapRef.current.set(draftNum, content);
+  editorContentRef.current = content;
+
+  // Debounced re-render for cross-pane sync (100ms)
+  if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+  syncTimerRef.current = setTimeout(() => {
+    setContentTick((t) => t + 1);
+  }, 100);
+}, []);
+```
+
+When the tick fires (100ms after last keystroke):
+
+- React re-renders
+- `getContentForPane(nonFocusedPaneId)` reads the latest content from `contentMapRef`
+- Non-focused pane's content prop updates
+- Content sync effect fires and updates the non-focused CM editor
+
+The focused pane also gets the content prop update, but by now the editor's doc matches the content (100ms of no typing = settled state), so `currentDoc === content` → no dispatch → **no cursor reset**.
+
+### Why 100ms Works
+
+The equality check `currentDoc !== content` is the safety valve. After 100ms of inactivity:
+
+- The editor has finished processing all pending keystrokes
+- `currentDoc` matches what was stored in `contentMapRef`
+- The content prop from the tick matches both
+- No document replacement needed → cursor stays in place
+
+### Auto-Save Without React State
+
+Since `setFocusedContent` is no longer called per keystroke, auto-save needs a different trigger. Use a polling interval that reads from the ref:
+
+```tsx
+useEffect(() => {
+  const interval = setInterval(() => {
+    const content = store.editorContentRef.current;
+    if (lastSavedRef.current === content) return;
+    lastSavedRef.current = content;
+    getBackend().drafts.write(activeDraftRef.current, content);
+    getBackend().draft.write(content);
+  }, 500);
+  return () => clearInterval(interval);
+}, []);
+```
+
+## Scroll Position Preservation
+
+Full document replacement in the non-focused pane resets CM's internal scroll position (cursor defaults to position 0, CM scrolls to show it).
+
+Save and restore `scrollTop` around the replacement:
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    const scrollTop = view.scrollDOM.scrollTop;
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+    requestAnimationFrame(() => {
+      if (viewRef.current) {
+        viewRef.current.scrollDOM.scrollTop = scrollTop;
+      }
+    });
+  }
+}, [content]);
+```
+
+For draft switches (where scroll SHOULD reset to top), use the `activeDraft` prop to distinguish:
+
+```tsx
+const draftChanged = activeDraft !== prevActiveDraftRef.current;
+const scrollTop = draftChanged ? 0 : view.scrollDOM.scrollTop;
+```
+
+## Layout: `absolute inset-0` for Editor Containment
+
+The editor must be inside a container with explicit dimensions. Without this, `display: contents` or flex-based layouts let CM's `scrollPastEnd()` padding affect the overall layout, and `clientHeight === scrollHeight` (no scroll possible).
+
+```tsx
+{/* Parent has flex-1 overflow-hidden relative → defines the available space */}
+<div className="flex-1 overflow-hidden relative">
+  {/* absolute inset-0 → editor constrained to parent's dimensions */}
+  <div className="absolute inset-0 flex flex-col">
+    <EditorPane content={content} onChange={onChange} readOnly={readOnly} />
+  </div>
+</div>
+```
+
+<Warning>
+
+The parent of the `absolute inset-0` wrapper must be a **flex child with a defined height chain**. If any ancestor uses `display: block` instead of `display: flex`, `flex-1` on children won't propagate height, and the editor collapses to 0px. Debug with: inspect the `.cm-scroller` element's `clientHeight` — if it equals `scrollHeight`, the height chain is broken.
+
+</Warning>
+
+### CSS Containment
+
+`contain: layout paint` on macOS WKWebView does NOT prevent the measure loop (unlike Chromium). The debounced content tick is the actual fix. CSS containment is optional belt-and-suspenders.
+
+### `display: contents` Is Dangerous
+
+`display: contents` removes the wrapper box from the layout tree, letting the editor participate directly in the parent's flex context. This means:
+
+- Two editors compete for flex space
+- `scrollPastEnd()` padding changes in one editor affect the other's container size
+- Layout thrashing → measure loop
+
+Always use a proper container (`absolute inset-0` or explicit flex child) instead.
+
+## Focus Change Handling
+
+When focus moves between panes:
+
+1. **Flush** the old pane's pending auto-save
+2. **Read** the new pane's draft from disk (always fresh)
+3. **Skip** the disk read if content hasn't changed (prevents unnecessary scroll reset)
+4. **Persist** the active draft to backend
+
+```tsx
+const handleFocusChange = async (newPaneId: string) => {
+  // Flush old pane
+  await getBackend().drafts.write(activeDraftRef.current, editorContentRef.current);
+
+  // Read new pane's draft (only update if changed)
+  const freshContent = await getBackend().drafts.read(newPaneDraft);
+  const cachedContent = contentMapRef.current.get(newPaneDraft);
+  if (freshContent !== cachedContent) {
+    contentMapRef.current.set(newPaneDraft, freshContent);
+    setFocusedContent(freshContent); // Triggers re-render → content sync
+  }
+
+  // Persist
+  await getBackend().drafts.setActive(newPaneDraft);
+};
+```
+
+<Tip>
+
+Guard against overlapping async focus changes with a monotonic counter (`focusChangeIdRef`). Check the counter after each `await` and bail if a newer change has started.
+
+</Tip>
+
+## WKWebView "Paste" Tooltip
+
+On macOS, `navigator.clipboard.readText()` triggers the native "Paste" editing menu. If vim mode's clipboard sync calls this on every `focusin` event, the Paste tooltip appears whenever the user clicks the editor.
+
+**Fix**: only sync the clipboard on `window` focus (app regains focus from another app), not on editor `focusin`:
+
+```tsx
+// WRONG — triggers Paste tooltip on every editor click
+window.addEventListener("focus", syncHandler);
+editorElement.addEventListener("focusin", syncHandler); // ← Remove this
+
+// CORRECT — only syncs when app regains focus
+window.addEventListener("focus", syncHandler);
+```
+
+<Warning>
+
+This is specific to macOS WKWebView (used by Tauri). Chromium-based apps (Electron) do not show the Paste tooltip on `clipboard.readText()`.
+
+</Warning>
+
+## `suppressAutoFocus` for Split Panes
+
+In single-pane mode, `view.focus()` is called after editor creation so the user can type immediately. In split mode, this is problematic:
+
+- Both editors call `view.focus()` → only the last one gets focus
+- On macOS WKWebView, programmatic focus can trigger the Paste tooltip
+
+Add a `suppressAutoFocus` prop to skip `view.focus()` on creation:
+
+```tsx
+viewRef.current = view;
+if (!readOnly && !suppressAutoFocus) view.focus();
+```
+
+Instead, focus the editor explicitly when the pane gains focus (via click or keyboard navigation).
+
+## Summary
+
+| Problem | Root Cause | Solution |
+|---------|-----------|----------|
+| Measure loop | Per-keystroke React re-renders propagate content to both editors | Debounced contentTick (100ms) — no per-keystroke state updates |
+| Cursor jump | Content prop arrives while editor is mid-keystroke | Same debounce — by 100ms, editor doc matches content prop |
+| Scroll reset on sync | Full doc replacement resets CM scroll to cursor pos 0 | Save/restore `scrollTop` around dispatch |
+| Scroll reset on draft switch | Same mechanism | Use `activeDraft` prop to detect draft change → scroll to 0 |
+| Editor height 0 | `display: contents` breaks height chain | `absolute inset-0` wrapper with proper flex parent |
+| Paste tooltip (WKWebView) | `clipboard.readText()` on focusin | Only sync clipboard on window focus, not editor focusin |
+| Auto-focus conflicts | Multiple editors call `view.focus()` | `suppressAutoFocus` prop, explicit focus on pane gain |

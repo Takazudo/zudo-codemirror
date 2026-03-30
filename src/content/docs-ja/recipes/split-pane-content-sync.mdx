@@ -1,0 +1,247 @@
+---
+title: 分割ペインのコンテンツ同期
+description: 分割ペインレイアウトで複数のCodeMirrorエディタを管理するための実戦的な戦略。メジャーループ防止、カーソル位置の保持、デバウンスによるペイン間同期、WKWebView固有の問題と対策。
+sidebar_position: 6
+---
+
+# 分割ペインのコンテンツ同期
+
+複数のCodeMirrorエディタが同じビューポートを共有する場合（分割ペインレイアウトなど）、3つの重大な問題が発生します：
+
+1. **メジャーループの暴走** — 2つのエディタがレイアウト空間を競合し、CodeMirrorの測定ループが繰り返しリスタート（"Measure loop restarted more than 5 times"）
+2. **カーソル位置のリセット** — Reactの状態を経由したコンテンツのラウンドトリップにより、ドキュメント全体の置換が発生しカーソルが先頭に移動
+3. **WKWebViewの「ペースト」ツールチップ** — `navigator.clipboard.readText()` が focusin で呼ばれると、macOSネイティブの編集メニューが表示される
+
+## 根本原因：キーストロークごとのReact再レンダリング
+
+標準的なReact統合パターンでは、コンテンツ同期エフェクトを使用します：
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+  }
+}, [content]);
+```
+
+単一エディタでは正常に動作します。分割ペインで同じドラフトを共有する場合、問題の連鎖が発生します：
+
+1. フォーカスされたエディタでユーザーが入力 → `onChange` が発火
+2. `onChange` が `setFocusedContent(newContent)` を呼ぶ（React状態）
+3. Reactが再レンダリング → コンテンツpropが**両方の**ペインに伝播
+4. フォーカスペイン：`currentDoc === content` → dispatch不要（安全）
+5. 非フォーカスペイン：`currentDoc !== content` → ドキュメント全体の置換
+6. 置換がCodeMirrorの再測定をトリガー → フォーカスエディタと競合 → **メジャーループ**
+
+カーソルリセットの変種：React状態の更新がユーザーの入力中に到着すると（レース条件）、フォーカスペインが `currentDoc !== content` を検出してドキュメントを置換し、カーソルが位置0にリセットされます。
+
+## 解決策：デバウンスされたコンテンツTick（キーストロークごとの状態更新なし）
+
+重要な洞察：**キーストロークごとにReact状態を更新しない**。コンテンツはref（自動保存用）に格納し、デバウンスされた状態カウンターでペイン間同期をトリガーします。
+
+```tsx
+// 共有ドラフトストア内
+const contentMapRef = useRef(new Map<number, string>());
+const [, setContentTick] = useState(0);
+const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+const setContentForPane = useCallback((paneId: string, content: string) => {
+  // refを即座に更新（React再レンダリングなし）
+  contentMapRef.current.set(draftNum, content);
+  editorContentRef.current = content;
+
+  // デバウンスされた再レンダリング（100ms）
+  if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+  syncTimerRef.current = setTimeout(() => {
+    setContentTick((t) => t + 1);
+  }, 100);
+}, []);
+```
+
+tickが発火すると（最後のキーストロークから100ms後）：
+
+- Reactが再レンダリング
+- `getContentForPane(nonFocusedPaneId)` が `contentMapRef` から最新のコンテンツを読み取る
+- 非フォーカスペインのコンテンツpropが更新される
+- コンテンツ同期エフェクトが発火し、非フォーカスCMエディタを更新
+
+フォーカスペインもコンテンツpropの更新を受け取りますが、この時点でエディタのdocはコンテンツと一致している（100msの無入力 = 安定状態）ため、`currentDoc === content` → dispatch不要 → **カーソルリセットなし**。
+
+### 100msで動作する理由
+
+等価チェック `currentDoc !== content` が安全弁です。100msの無操作後：
+
+- エディタはすべての保留中キーストロークの処理を完了
+- `currentDoc` は `contentMapRef` に格納されたものと一致
+- tickからのコンテンツpropも両方と一致
+- ドキュメント置換不要 → カーソルは移動しない
+
+### React状態なしの自動保存
+
+`setFocusedContent` がキーストロークごとに呼ばれなくなったため、自動保存には別のトリガーが必要です。refからポーリングするインターバルを使用：
+
+```tsx
+useEffect(() => {
+  const interval = setInterval(() => {
+    const content = store.editorContentRef.current;
+    if (lastSavedRef.current === content) return;
+    lastSavedRef.current = content;
+    getBackend().drafts.write(activeDraftRef.current, content);
+    getBackend().draft.write(content);
+  }, 500);
+  return () => clearInterval(interval);
+}, []);
+```
+
+## スクロール位置の保持
+
+非フォーカスペインでのドキュメント全体の置換は、CMの内部スクロール位置をリセットします（カーソルがデフォルトで位置0になり、CMがそこにスクロール）。
+
+置換の前後で `scrollTop` を保存・復元します：
+
+```tsx
+useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc !== content) {
+    const scrollTop = view.scrollDOM.scrollTop;
+    view.dispatch({
+      changes: { from: 0, to: currentDoc.length, insert: content },
+    });
+    requestAnimationFrame(() => {
+      if (viewRef.current) {
+        viewRef.current.scrollDOM.scrollTop = scrollTop;
+      }
+    });
+  }
+}, [content]);
+```
+
+ドラフト切り替え時（スクロールをトップにリセットすべき場合）は、`activeDraft` propで区別します：
+
+```tsx
+const draftChanged = activeDraft !== prevActiveDraftRef.current;
+const scrollTop = draftChanged ? 0 : view.scrollDOM.scrollTop;
+```
+
+## レイアウト：`absolute inset-0` によるエディタの封じ込め
+
+エディタは明示的な寸法を持つコンテナ内に配置する必要があります。これがないと、`display: contents` やflex基準のレイアウトでCMの `scrollPastEnd()` パディングが全体レイアウトに影響し、`clientHeight === scrollHeight`（スクロール不可）になります。
+
+```tsx
+{/* 親はflex-1 overflow-hidden relative → 利用可能な空間を定義 */}
+<div className="flex-1 overflow-hidden relative">
+  {/* absolute inset-0 → エディタが親の寸法に制約される */}
+  <div className="absolute inset-0 flex flex-col">
+    <EditorPane content={content} onChange={onChange} readOnly={readOnly} />
+  </div>
+</div>
+```
+
+<Warning>
+
+`absolute inset-0` ラッパーの親は、**定義された高さチェーンを持つflexの子**である必要があります。先祖のいずれかが `display: flex` ではなく `display: block` を使用している場合、子の `flex-1` は高さを伝播せず、エディタが0pxに縮小します。デバッグ方法：`.cm-scroller` 要素の `clientHeight` を検査 — `scrollHeight` と等しい場合、高さチェーンが壊れています。
+
+</Warning>
+
+### CSSコンテインメント
+
+macOS WKWebViewでは、`contain: layout paint` はメジャーループを**防止しません**（Chromiumとは異なる）。デバウンスされたコンテンツtickが実際の修正です。CSSコンテインメントはオプションの追加安全策です。
+
+### `display: contents` は危険
+
+`display: contents` はラッパーボックスをレイアウトツリーから削除し、エディタを親のflexコンテキストに直接参加させます。これにより：
+
+- 2つのエディタがflex空間を競合
+- 一方のエディタの `scrollPastEnd()` パディング変更が、もう一方のコンテナサイズに影響
+- レイアウトスラッシング → メジャーループ
+
+常に適切なコンテナ（`absolute inset-0` または明示的なflex子）を使用してください。
+
+## フォーカス変更の処理
+
+ペイン間でフォーカスが移動する場合：
+
+1. 古いペインの保留中の自動保存を**フラッシュ**
+2. 新しいペインのドラフトをディスクから**読み込み**（常に最新）
+3. コンテンツが変更されていない場合は読み込みを**スキップ**（不要なスクロールリセットを防止）
+4. アクティブなドラフトをバックエンドに**永続化**
+
+```tsx
+const handleFocusChange = async (newPaneId: string) => {
+  // 古いペインをフラッシュ
+  await getBackend().drafts.write(activeDraftRef.current, editorContentRef.current);
+
+  // 新しいペインのドラフトを読み込み（変更がある場合のみ更新）
+  const freshContent = await getBackend().drafts.read(newPaneDraft);
+  const cachedContent = contentMapRef.current.get(newPaneDraft);
+  if (freshContent !== cachedContent) {
+    contentMapRef.current.set(newPaneDraft, freshContent);
+    setFocusedContent(freshContent); // 再レンダリングをトリガー → コンテンツ同期
+  }
+
+  // 永続化
+  await getBackend().drafts.setActive(newPaneDraft);
+};
+```
+
+<Tip>
+
+単調増加カウンター（`focusChangeIdRef`）で非同期フォーカス変更のオーバーラップを防止します。各 `await` の後にカウンターを確認し、新しい変更が開始されていればbailします。
+
+</Tip>
+
+## WKWebViewの「ペースト」ツールチップ
+
+macOSでは、`navigator.clipboard.readText()` がネイティブの「ペースト」編集メニューをトリガーします。vimモードのクリップボード同期がすべての `focusin` イベントでこれを呼び出す場合、ユーザーがエディタをクリックするたびにペーストツールチップが表示されます。
+
+**修正方法**: クリップボードの同期はエディタの `focusin` ではなく、`window` フォーカス（アプリが別のアプリからフォーカスを取り戻す場合）のみで行います：
+
+```tsx
+// 間違い — エディタをクリックするたびにペーストツールチップが表示される
+window.addEventListener("focus", syncHandler);
+editorElement.addEventListener("focusin", syncHandler); // ← これを削除
+
+// 正しい — アプリがフォーカスを取り戻した時のみ同期
+window.addEventListener("focus", syncHandler);
+```
+
+<Warning>
+
+これはmacOS WKWebView（Tauriで使用）に固有です。Chromiumベースのアプリ（Electron）では、`clipboard.readText()` でペーストツールチップは表示されません。
+
+</Warning>
+
+## 分割ペイン用の `suppressAutoFocus`
+
+単一ペインモードでは、エディタ作成後に `view.focus()` を呼び出してユーザーがすぐに入力できるようにします。分割モードではこれが問題になります：
+
+- 両方のエディタが `view.focus()` を呼ぶ → 最後の1つだけがフォーカスを取得
+- macOS WKWebViewでは、プログラム的なフォーカスがペーストツールチップをトリガーする可能性がある
+
+作成時に `view.focus()` をスキップする `suppressAutoFocus` propを追加：
+
+```tsx
+viewRef.current = view;
+if (!readOnly && !suppressAutoFocus) view.focus();
+```
+
+代わりに、ペインがフォーカスを取得した時（クリックまたはキーボードナビゲーション経由）にエディタを明示的にフォーカスします。
+
+## まとめ
+
+| 問題 | 根本原因 | 解決策 |
+|------|---------|--------|
+| メジャーループ | キーストロークごとのReact再レンダリングが両エディタにコンテンツを伝播 | デバウンスされたcontentTick（100ms）— キーストロークごとの状態更新なし |
+| カーソルジャンプ | エディタがキーストローク中にコンテンツpropが到着 | 同じデバウンス — 100ms後にはエディタdocがコンテンツpropと一致 |
+| 同期時のスクロールリセット | ドキュメント全体の置換がCMのスクロールをカーソル位置0にリセット | dispatch前後で `scrollTop` を保存・復元 |
+| ドラフト切替時のスクロールリセット | 同じメカニズム | `activeDraft` propでドラフト変更を検出 → 0にスクロール |
+| エディタの高さが0 | `display: contents` が高さチェーンを壊す | 適切なflex親を持つ `absolute inset-0` ラッパー |
+| ペーストツールチップ（WKWebView） | focusinでの `clipboard.readText()` | windowフォーカスでのみクリップボード同期 |
+| 自動フォーカスの競合 | 複数エディタが `view.focus()` を呼ぶ | `suppressAutoFocus` prop、ペイン取得時に明示的フォーカス |
