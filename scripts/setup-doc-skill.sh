@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Read project name from package.json
 PROJECT_NAME=$(node -e "console.log(require('$ROOT_DIR/package.json').name || 'my-project')")
-DEFAULT_SKILL_NAME="${PROJECT_NAME}-wisdom"
+DEFAULT_SKILL_NAME="codemirror-wisdom"
 
 # Prompt for skill name
 echo ""

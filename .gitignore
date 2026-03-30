@@ -5,6 +5,8 @@ __inbox/
 {logdir}/
 worktrees/
 .playwright-mcp/
+# Generated skill files (contain machine-specific absolute paths)
+.claude/skills/codemirror-wisdom/SKILL.md
 *.tgz
 *.log
 .env
