@@ -24,6 +24,8 @@ This creates the skill at `.claude/skills/codemirror-wisdom/` and symlinks it to
 
 ## Usage
 
+### Lookup Mode (default)
+
 In any Claude Code session, invoke the skill with a topic keyword:
 
 ```
@@ -33,6 +35,23 @@ In any Claude Code session, invoke the skill with a topic keyword:
 ```
 
 The skill will find the relevant article(s) from the documentation, read them, and apply the CodeMirror patterns when writing code.
+
+### Update Mode (`-u` / `--update`)
+
+When you have new information about CodeMirror and want to add or update documentation in this repo, use the `-u` flag:
+
+```
+/codemirror-wisdom -u extensions
+/codemirror-wisdom --update vim mode
+```
+
+In update mode, the skill guides Claude to:
+
+1. Ask what you learned or want to document
+2. Search existing docs to find related articles
+3. Create a new `.mdx` file or update an existing one
+4. Update the corresponding Japanese translation under `docs-ja/`
+5. Run `pnpm format:md` to format the new/changed files
 
 ## Skill Structure
 
