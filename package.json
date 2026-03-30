@@ -12,6 +12,8 @@
     "check": "astro check",
     "// ── CM6 bundle ──────────────────────────────────": "",
     "build:cm6": "bash scripts/build-cm6-bundle.sh",
+    "// ── Skill ───────────────────────────────────────": "",
+    "setup:doc-skill": "bash scripts/setup-doc-skill.sh",
     "// ── Code quality ────────────────────────────────": "",
     "format:md": "pnpm dlx @takazudo/mdx-formatter --write 'src/content/**/*.{md,mdx}'",
     "format:md:check": "pnpm dlx @takazudo/mdx-formatter --check 'src/content/**/*.{md,mdx}'",
