@@ -1,0 +1,57 @@
+---
+title: codemirror-wisdom Skill
+description: CodeMirror 6のドキュメント記事をインデックス化するClaude Codeスキル。AI支援開発に活用できます。
+sidebar_position: 10
+---
+
+`codemirror-wisdom`スキルは、このサイトのCodeMirror 6ドキュメント記事をすべてインデックス化するClaude Codeスキルです。AIコーディングエージェントが開発中にCodeMirrorのパターンやテクニックを素早く参照できるようにします。
+
+## 機能
+
+CodeMirrorのコンセプトをドキュメント記事にマッピングするインデックスを保持します。呼び出されると、関連する記事を見つけて読み込み、推奨パターンを適用します。
+
+ドキュメントインデックスは`src/content/docs/`（英語）と`src/content/docs-ja/`（日本語）のすべてのMDXファイルから生成されます。各`.mdx`ファイルにはYAMLフロントマターに`title`と`description`フィールドがあり、適切な記事の特定に役立ちます。
+
+## インストール
+
+セットアップスクリプトを実行して、スキルを作成しグローバルClaude Codeスキルディレクトリにシンボリックリンクを作成します：
+
+```bash
+pnpm run setup:doc-skill
+```
+
+`.claude/skills/codemirror-wisdom/`にスキルが作成され、`~/.claude/skills/codemirror-wisdom`にシンボリックリンクが張られます。
+
+## 使い方
+
+Claude Codeセッション内で、トピックキーワードを指定してスキルを呼び出します：
+
+```
+/codemirror-wisdom vim mode
+/codemirror-wisdom state management
+/codemirror-wisdom decorations
+```
+
+スキルがドキュメントから関連する記事を見つけ、読み込んだうえで、CodeMirrorのパターンを適用してコードを書きます。
+
+## スキル構成
+
+```
+.claude/skills/codemirror-wisdom/
+  SKILL.md         # 生成されたスキル定義
+  docs/            # src/content/docs/ へのシンボリックリンク
+  docs-ja/         # src/content/docs-ja/ へのシンボリックリンク
+```
+
+`SKILL.md`はセットアップスクリプトによって生成されます。スキルのメタデータと、Claude Codeがドキュメントをどのように使用すべきかの指示が含まれています。
+
+## 動作の仕組み
+
+`/codemirror-wisdom <トピック>`を呼び出すと、Claude Codeは以下の手順で動作します：
+
+1. トピックに基づいて`docs/`ディレクトリから関連する記事を検索
+2. 必要な記事のみを読み込み — すべての記事を一度に読み込むことはしない
+3. 記事の情報を質問への回答に適用
+4. ソース記事のパスを提示し、さらなる参照を可能にする
+
+日本語ドキュメントは`docs-ja/`に用意されています。日本語で作業する場合や日本語コンテンツを求められた場合、スキルは`docs-ja/`の記事を優先的に使用します。
