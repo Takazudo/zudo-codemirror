@@ -90,7 +90,7 @@ argument-hint: "[-u|--update] [topic keyword, e.g., 'configuration', 'sidebar', 
 # $PROJECT_NAME Documentation Reference
 
 Look up documentation from the $PROJECT_NAME project.
-Documentation base path: \`$REPO_ROOT/src/content/docs\`
+Documentation base path: \`src/content/docs\` (relative to repo root)
 
 ## Mode Detection
 
@@ -121,17 +121,22 @@ documentation in this repo.
    the topic. Read them to understand what is already covered.
 3. **Decide create vs update**: If an existing article covers the topic, update
    it. Otherwise, create a new \`.mdx\` file in the appropriate subdirectory.
-4. **Write the content**: Follow the project conventions:
-   - Required frontmatter: \`title\` (string). Optional: \`description\`,
-     \`sidebar_position\` (number).
+4. **Write the content**: Follow the doc-authoring rules in the root CLAUDE.md:
+   - Required frontmatter: \`title\` (string). Always set \`sidebar_position\`.
+     Optional: \`description\`, \`sidebar_label\`, \`tags\`, etc.
+   - Do NOT use \`# h1\` in content — the frontmatter \`title\` renders as h1.
+     Start with \`## h2\` headings.
    - Use available MDX components (\`<Note>\`, \`<Tip>\`, \`<Info>\`, \`<Warning>\`,
      \`<Danger>\`, \`<HtmlPreview>\`) where appropriate.
    - For live demos, use \`<HtmlPreview>\` with \`js\`/\`displayJs\` props that
      reference \`CM.*\` globals from the pre-built bundle.
+   - Link to other docs using relative paths with \`.mdx\` extension.
 5. **Update Japanese docs**: Create or update the corresponding file under
-   \`docs-ja/\` mirroring the English directory structure. Keep \`<HtmlPreview>\`
-   blocks identical — only translate surrounding text.
+   \`docs-ja/\` mirroring the English directory structure. Keep code blocks,
+   Mermaid diagrams, and \`<HtmlPreview>\` blocks identical — only translate
+   surrounding prose. Exception: pages with \`generated: true\` skip translation.
 6. **Format**: Run \`pnpm format:md\` to format the new/changed MDX files.
+7. **Verify**: Run \`pnpm build\` to confirm the site builds correctly.
 
 ## Documentation Structure
 
