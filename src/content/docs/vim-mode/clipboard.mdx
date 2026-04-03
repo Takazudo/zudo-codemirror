@@ -224,7 +224,7 @@ function createClipboardRegister() {
   return register;
 }
 
-function setupClipboardIntegration(editorElement: HTMLElement) {
+function setupClipboardIntegration() {
   const controller = Vim.getRegisterController();
   const registers = controller.registers;
   const clipboardRegister = createClipboardRegister();
@@ -265,4 +265,4 @@ function setupClipboardIntegration(editorElement: HTMLElement) {
 }
 ```
 
-Call `setupClipboardIntegration(view.dom)` after creating the EditorView. Store the returned cleanup function and call it when the editor is destroyed.
+Call `setupClipboardIntegration()` after creating the EditorView. Store the returned cleanup function and call it when the editor is destroyed.

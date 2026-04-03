@@ -85,6 +85,7 @@ function buildDecorationsFromMarks(
   let rangeIdx = 0;
 
   for (const mark of marks) {
+    // Advance past visible ranges that end before this mark
     while (
       rangeIdx < visibleRanges.length &&
       visibleRanges[rangeIdx].to <= mark.pos

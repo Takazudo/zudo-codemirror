@@ -224,7 +224,7 @@ function createClipboardRegister() {
   return register;
 }
 
-function setupClipboardIntegration(editorElement: HTMLElement) {
+function setupClipboardIntegration() {
   const controller = Vim.getRegisterController();
   const registers = controller.registers;
   const clipboardRegister = createClipboardRegister();
@@ -265,4 +265,4 @@ function setupClipboardIntegration(editorElement: HTMLElement) {
 }
 ```
 
-EditorView の作成後に `setupClipboardIntegration(view.dom)` を呼び出してください。返されたクリーンアップ関数を保存し、エディター破棄時に呼び出してください。
+EditorView の作成後に `setupClipboardIntegration()` を呼び出してください。返されたクリーンアップ関数を保存し、エディター破棄時に呼び出してください。
