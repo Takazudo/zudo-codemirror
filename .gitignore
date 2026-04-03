@@ -7,6 +7,8 @@ worktrees/
 .playwright-mcp/
 # Generated skill files (contain machine-specific absolute paths)
 .claude/skills/codemirror-wisdom/SKILL.md
+.claude/skills/codemirror-wisdom/docs
+.claude/skills/codemirror-wisdom/docs-ja
 *.tgz
 *.log
 .env
