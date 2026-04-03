@@ -1,0 +1,277 @@
+---
+title: Markdown リスト処理
+description: Markdown リスト向けの2つの補完的な Extension -- Enter でのリストマーカー自動継続と、構文木解析による折り返し行のハンギングインデント。
+sidebar_position: 11
+---
+
+# Markdown リスト処理
+
+このレシピでは、Markdown リスト向けの2つの補完的な CodeMirror Extension を解説します。
+
+1. **リスト継続** -- Enter を押したときにリストマーカーを自動継続、番号の自動インクリメント、空のリストアイテムの削除
+2. **ハンギングインデント** -- 折り返し行をリストマーカーの後のコンテンツに揃える
+
+これらの Extension を組み合わせることで、Obsidian のような Markdown リスト編集体験を実現します。
+
+## なぜビルトインではなくカスタムなのか？
+
+CodeMirror の `@codemirror/lang-markdown` は基本的なリスト継続を処理する `insertNewlineContinueMarkup` を提供しています。しかし、カスタム実装により以下のより細かい制御が可能になります。
+
+- **チェックボックスの継続** -- タスクリストを継続する際に未チェックの `[ ]` チェックボックスを挿入
+- **カーソル末尾の要件** -- 行末にカーソルがある場合のみトリガーし、行の途中ではトリガーしない
+- **空アイテムの動作** -- リストアイテムにコンテンツがない場合、プレフィックスだけでなく行全体をクリア
+
+ハンギングインデント Extension は完全にカスタムで、CodeMirror にはビルトインの同等機能がありません。
+
+## パート 1: リスト継続
+
+### 正規表現によるリスト検出
+
+この Extension は行頭のリストマーカーを検出する正規表現を使用します。
+
+```ts
+const listMarkerRe = /^(\s*)([-*+]|\d+\.)\s(\[[ xX]\]\s)?/;
+```
+
+これがマッチするもの:
+
+- オプションの先頭空白（`\s*`）
+- リストマーカー: `-`, `*`, `+`, または数字の後の `.`
+- マーカー後の必須スペース
+- オプションのチェックボックス（`[ ]`, `[x]`, `[X]`）と末尾のスペース
+
+### 次のマーカーの計算
+
+```ts
+function getNextListMarker(
+  lineText: string,
+): { prefix: string; isEmpty: boolean } | null {
+  const match = lineText.match(listMarkerRe);
+  if (!match) return null;
+
+  const [fullMatch, indent, marker, checkbox] = match;
+  const textAfterMarker = lineText.slice(fullMatch.length);
+  const isEmpty = textAfterMarker.trim() === "";
+
+  let nextMarker = marker;
+  if (/^\d+\./.test(marker)) {
+    const num = parseInt(marker, 10);
+    nextMarker = `${num + 1}.`;
+  }
+
+  const nextCheckbox = checkbox ? "[ ] " : "";
+  const prefix = `${indent}${nextMarker} ${nextCheckbox}`;
+
+  return { prefix, isEmpty };
+}
+```
+
+番号付きリストは自動インクリメントされます。現在の行が `3.` で始まる場合、次の行は `4.` になります。チェックボックスリストは未チェックの `[ ]` で継続します。
+
+### キーマップハンドラー
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+function handleEnterInList(view: EditorView): boolean {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+
+  // 単一カーソルのみ処理（範囲選択なし）
+  if (from !== to) return false;
+
+  const line = state.doc.lineAt(from);
+
+  // カーソルが行末にある場合のみトリガー
+  if (from !== line.to) return false;
+
+  const result = getNextListMarker(line.text);
+  if (!result) return false;
+
+  // 空のリストアイテム -- マーカー行を削除してリストを終了
+  if (result.isEmpty) {
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: "" },
+    });
+    return true;
+  }
+
+  // 継続されたマーカーで新しい行を挿入
+  const newLine = `\n${result.prefix}`;
+  view.dispatch({
+    changes: { from, to: from, insert: newLine },
+    selection: { anchor: from + newLine.length },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function markdownListIndent() {
+  return keymap.of([
+    { key: "Enter", run: handleEnterInList },
+  ]);
+}
+```
+
+<Tip>
+
+ハンドラーは適用されない場合（非リスト行、カーソルが末尾にない、アクティブな選択がある場合）に `false` を返します。これにより、Enter キーの他のキーバインディングがイベントを処理できます。`true` を返すと伝播が停止します。
+
+</Tip>
+
+### 動作まとめ
+
+| 現在の行 | アクション |
+| --- | --- |
+| `- Item text` | `\n- ` を挿入し、マーカー後にカーソルを配置 |
+| `3. Item text` | `\n4. ` を挿入（自動インクリメント） |
+| `- [ ] Task` | `\n- [ ] ` を挿入（未チェックのチェックボックス） |
+| `- `（空アイテム） | 行全体をクリアし、リストを終了 |
+
+## パート 2: ハンギングインデント
+
+長いリストアイテムが次の視覚行に折り返される場合、デフォルトの動作では継続テキストがリストマーカーと左揃えになります。ハンギングインデントはマーカーの*後の*コンテンツに揃えます。
+
+```
+ハンギングインデントなし:
+- これは次の視覚行に折り返される長いリスト
+アイテムです
+
+ハンギングインデントあり:
+- これは次の視覚行に折り返される長いリスト
+  アイテムです
+```
+
+### 構文木を使ったマーカー幅の計測
+
+この Extension は Lezer 構文木を使用して `ListItem` ノードを特定し、マーカープレフィックスの幅を計測します。
+
+```ts
+import { syntaxTree } from "@codemirror/language";
+import { countColumn } from "@codemirror/state";
+
+const listPrefixRe =
+  /^([ \t]*)([-*+]|\d+\.)( {1,4}\[[ xX]\])? {1,4}/;
+
+function getMarkerWidth(text: string, tabSize: number): number {
+  const m = listPrefixRe.exec(text);
+  if (!m) return 0;
+  const markerOnly = m[0].slice(m[1].length);
+  return countColumn(markerOnly, tabSize);
+}
+```
+
+マーカー幅は CodeMirror の state モジュールの `countColumn` を使用して計測され、タブ文字を正しく考慮します。先頭の空白は除外されます。CodeMirror が通常のインデントで処理するためです。
+
+### デコレーションの構築
+
+```ts
+import {
+  ViewPlugin,
+  Decoration,
+  DecorationSet,
+  EditorView,
+  ViewUpdate,
+} from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+function buildDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const tree = syntaxTree(view.state);
+  const seen = new Set<number>();
+
+  for (const { from, to } of view.visibleRanges) {
+    tree.iterate({
+      from,
+      to,
+      enter(node) {
+        if (node.name !== "ListItem") return;
+
+        const line = view.state.doc.lineAt(node.from);
+        if (seen.has(line.from)) return;
+        seen.add(line.from);
+
+        const cols = getMarkerWidth(line.text, view.state.tabSize);
+        if (cols <= 0) return;
+
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({
+            attributes: {
+              class: "cm-list-hanging-indent",
+              style: `--cm-hang: ${cols}ch`,
+            },
+          }),
+        );
+      },
+    });
+  }
+
+  return builder.finish();
+}
+```
+
+`seen` セットは、構文木が同じ行から始まる複数の `ListItem` ノードを返す場合の重複デコレーションを防ぎます。
+
+### CSS テクニック
+
+ハンギングインデントは `margin-left` と `text-indent` を駆動する CSS カスタムプロパティ `--cm-hang` で実現されます。
+
+```ts
+const listHangingIndentTheme = EditorView.baseTheme({
+  ".cm-list-hanging-indent": {
+    marginLeft: "var(--cm-hang)",
+    textIndent: "calc(-1 * var(--cm-hang))",
+  },
+});
+```
+
+仕組み:
+
+- `margin-left: var(--cm-hang)` は行全体（折り返しテキストを含む）を右にシフト
+- `text-indent: calc(-1 * var(--cm-hang))` は最初の行を元の位置に引き戻す
+
+結果: 最初の行は通常の位置から始まり、折り返し行はマーカーの後のコンテンツに揃えてインデントされます。
+
+<Warning>
+
+`ch` 単位は等幅フォントを前提としています。プロポーショナルフォントでは文字幅が異なるため、配置は近似値になります。プロポーショナルフォントで正確な配置を得るには、プレフィックステキストの実際のピクセル幅を計測する必要があります。
+
+</Warning>
+
+### 構文木の更新
+
+プラグインは `docChanged` と `viewportChanged` だけでなく、構文木自体が変更された場合にもデコレーションを再構築します。
+
+```ts
+update(update: ViewUpdate) {
+  if (
+    update.docChanged ||
+    update.viewportChanged ||
+    syntaxTree(update.startState) !== syntaxTree(update.state)
+  ) {
+    this.decorations = buildDecorations(update.view);
+  }
+}
+```
+
+これは、Lezer パーサーがインクリメンタルに実行され、ドキュメント変更後にツリーが非同期的に更新されるケースを処理します。
+
+## 両方の Extension を一緒に使用する
+
+ハンギングインデント Extension が使用する `margin-left` / `text-indent` アプローチは、インデントガイド Extension（[インデントガイド](/docs-ja/recipes/indent-guides/)を参照）にも影響します。インデントガイドは擬似要素に `left: calc(-1 * var(--cm-hang, 0px))` を使用してマージンシフトを補正し、リスト行と非リスト行の両方でガイドが正しく配置されるようにします。
+
+```ts
+const extensions = [
+  // ... other extensions
+  markdownListIndent(),
+  listHangingIndent(),
+];
+```
+
+<Note>
+
+ハンギングインデントに `margin-left`（`padding-left` ではなく）を使用するのは意図的です。CodeMirror のテーマは `.cm-line` に水平パディング用の `padding-left` を設定します。`margin-left` を使用することで、そのパディングをオーバーライドせず、両方が共存できます。
+
+</Note>

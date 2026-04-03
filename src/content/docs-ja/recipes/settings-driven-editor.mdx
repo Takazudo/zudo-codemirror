@@ -1,0 +1,254 @@
+---
+title: 設定駆動型エディター構成
+description: アプリケーション設定オブジェクトから CodeMirror を完全に設定し、ランタイム再設定にはコンパートメントを、バリデーションには共有スキーマを使用するパターン。
+sidebar_position: 13
+---
+
+# 設定駆動型エディター構成
+
+このレシピでは、アプリケーション設定オブジェクトから CodeMirror エディターを完全に設定するパターンを解説します。すべてのエディター動作（フォント、インデント、機能トグル）が単一の設定ソースから供給され、共有スキーマによってバリデーションされます。
+
+## 設定オブジェクト
+
+エディター設定は型付きフィールドを持つプレーンオブジェクトです。
+
+```ts
+interface EditorSettings {
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+  paddingHorizontal: number;
+  paddingVertical: number;
+  indentType: "tab" | "spaces";
+  indentSize: number;
+  vimMode: boolean;
+  typewriterScrolling: boolean;
+  showIndentGuides: boolean;
+  bracketColorization: boolean;
+  markdownListIndent: boolean;
+  listHangingIndent: boolean;
+  showStatusBar: boolean;
+}
+```
+
+デフォルト値は共有パッケージで定義され、フロントエンドと設定バリデーションロジックの両方が同じデフォルトを使用します。
+
+```ts
+const defaultEditorSettings: EditorSettings = {
+  fontFamily: "Menlo",
+  fontSize: 14,
+  lineHeight: 1.6,
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+  indentType: "spaces",
+  indentSize: 2,
+  vimMode: false,
+  typewriterScrolling: false,
+  showIndentGuides: true,
+  bracketColorization: true,
+  markdownListIndent: true,
+  listHangingIndent: true,
+  showStatusBar: true,
+};
+```
+
+## 設定から Extension へのマッピング
+
+各設定は1つ以上の CodeMirror Extension または設定オプションにマッピングされます。Extension の配列は現在の設定に基づいて動的に構築されます。
+
+```ts
+import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, scrollPastEnd } from "@codemirror/view";
+import { indentUnit } from "@codemirror/language";
+import { indentWithTab } from "@codemirror/commands";
+import { vim } from "@replit/codemirror-vim";
+
+function buildExtensions(settings: EditorSettings) {
+  return [
+    // Vim モード（条件付き）
+    ...(settings.vimMode ? [vim()] : []),
+
+    // テーマによるフォントとレイアウト
+    EditorView.theme({
+      ".cm-scroller": {
+        fontFamily: `"${settings.fontFamily}", monospace`,
+        fontSize: `${settings.fontSize}px`,
+        lineHeight: String(settings.lineHeight),
+      },
+      ".cm-content": {
+        padding: `${settings.paddingVertical}px 0`,
+      },
+      ".cm-line": {
+        paddingLeft: `${settings.paddingHorizontal}px`,
+        paddingRight: `${settings.paddingHorizontal}px`,
+      },
+    }),
+
+    // インデント
+    EditorState.tabSize.of(settings.indentSize),
+    indentUnit.of(
+      settings.indentType === "tab"
+        ? "\t"
+        : " ".repeat(settings.indentSize),
+    ),
+    keymap.of([indentWithTab]),
+
+    // 機能トグル
+    ...(settings.markdownListIndent ? [markdownListIndent()] : []),
+    ...(settings.listHangingIndent ? [listHangingIndent()] : []),
+    ...(settings.showIndentGuides ? [indentGuides()] : []),
+    ...(settings.typewriterScrolling ? [typewriterScrolling()] : []),
+    ...(settings.bracketColorization ? [bracketColorize()] : []),
+
+    scrollPastEnd(),
+  ];
+}
+```
+
+### フォント設定
+
+フォントファミリー、サイズ、行の高さ、パディングはすべて `EditorView.theme()` で適用されます。CodeMirror はカーソル位置決め、行高さの計算、ビューポート測定に正確なピクセル値が必要なため、これらの値を CSS カスタムプロパティとして設定することはできません。
+
+### インデント
+
+2つの CodeMirror プリミティブがインデントを制御します。
+
+- `EditorState.tabSize.of(n)` -- タブ文字の視覚的な幅を設定
+- `indentUnit.of(unit)` -- ユーザーが Tab を押したときに挿入される内容を設定。`"\t"` 文字列はタブ文字を挿入し、スペースの文字列はそのスペース数を挿入
+
+### 機能トグル
+
+オプションの Extension は三項演算子とスプレッド演算子を使って条件付きで含めます。
+
+```ts
+...(settings.typewriterScrolling ? [typewriterScrolling()] : []),
+```
+
+このパターンは明確で、ネストされた if-else ブロックを回避します。各トグルは対応する Extension を追加または省略します。
+
+## ランタイム再設定のためのコンパートメント
+
+一部の設定はエディターを再作成せずにランタイムで変更できます。CodeMirror の [Compartment](/docs-ja/extensions/compartments/) がこれを可能にします。
+
+```ts
+const readOnlyCompartment = new Compartment();
+
+const extensions = [
+  readOnlyCompartment.of(EditorState.readOnly.of(false)),
+  // ... other extensions
+];
+
+// 後で readOnly をトグル:
+view.dispatch({
+  effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(true)),
+});
+```
+
+コンパートメントは頻繁に変更される設定（分割ペインでの読み取り専用モードなど）に便利です。まれにしか変更されない設定（フォントサイズや Vim モードなど）では、エディターの再作成のほうがシンプルで、多数のコンパートメントを管理する複雑さを回避できます。
+
+<Tip>
+
+実用的なガイドライン: アクティブな編集中に変更される設定（読み取り専用トグル、行の折り返し）にはコンパートメントを使用します。設定ダイアログで変更される設定（フォント、インデント、機能トグル）にはエディターを再作成します。CodeMirror は高速な初期化を前提に設計されているため、`EditorView` の再作成コストは低いです。
+
+</Tip>
+
+## バリデーションとデフォルト
+
+共有スキーマパッケージが設定をバリデーションし、デフォルトを適用します。
+
+```ts
+function validateEditorSettings(input: Partial<EditorSettings>): EditorSettings {
+  return {
+    fontFamily: input.fontFamily || defaultEditorSettings.fontFamily,
+    fontSize: clamp(input.fontSize ?? defaultEditorSettings.fontSize, 10, 24),
+    lineHeight: input.lineHeight ?? defaultEditorSettings.lineHeight,
+    paddingHorizontal: clamp(
+      input.paddingHorizontal ?? defaultEditorSettings.paddingHorizontal,
+      0,
+      48,
+    ),
+    paddingVertical: clamp(
+      input.paddingVertical ?? defaultEditorSettings.paddingVertical,
+      0,
+      48,
+    ),
+    indentType: input.indentType === "tab" ? "tab" : "spaces",
+    indentSize: clamp(input.indentSize ?? defaultEditorSettings.indentSize, 1, 8),
+    vimMode: input.vimMode ?? defaultEditorSettings.vimMode,
+    typewriterScrolling: input.typewriterScrolling ?? defaultEditorSettings.typewriterScrolling,
+    showIndentGuides: input.showIndentGuides ?? defaultEditorSettings.showIndentGuides,
+    bracketColorization: input.bracketColorization ?? defaultEditorSettings.bracketColorization,
+    markdownListIndent: input.markdownListIndent ?? defaultEditorSettings.markdownListIndent,
+    listHangingIndent: input.listHangingIndent ?? defaultEditorSettings.listHangingIndent,
+    showStatusBar: input.showStatusBar ?? defaultEditorSettings.showStatusBar,
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+```
+
+このバリデーションにより、ユーザーが設定ファイルに何を入力しても、エディターは常に期待される範囲内の安全な値を受け取ります。同じバリデーション関数がバックエンド（ディスクから設定を読み取る際）とフロントエンド（CodeMirror に渡す前）の両方で使用されます。
+
+## React 統合パターン
+
+React アプリケーションでは、設定が変更されると `useEffect` の依存関係を通じてエディターが再作成されます。
+
+```ts
+useEffect(() => {
+  if (!containerRef.current || !settings) return;
+
+  const extensions = buildExtensions(settings);
+  const state = EditorState.create({ doc: content, extensions });
+  const view = new EditorView({ state, parent: containerRef.current });
+
+  return () => view.destroy();
+}, [settings]);
+```
+
+`settings` オブジェクトはメモ化され、実際の値が変更された場合にのみ effect が再実行されます。
+
+```ts
+const settings = useMemo(
+  () => appSettings
+    ? { ...defaultEditorSettings, ...appSettings.editor }
+    : null,
+  [appSettings],
+);
+```
+
+<Note>
+
+エディターが再作成される際は、ドキュメントの内容とスクロール位置を保持する必要があります。`content` プロパティが現在のドキュメントを提供し、スクロール位置は `view.scrollDOM.scrollTop` で保存・復元できます。
+
+</Note>
+
+## 設定 UI
+
+各設定は設定 UI のフォームコントロールに対応します。設定ページは現在の設定とマージされる部分的な更新をディスパッチします。
+
+```ts
+interface EditorSettingsProps {
+  values: EditorSettings;
+  onChange: (values: Partial<EditorSettings>) => void;
+}
+
+// 例: フォントサイズ入力
+<input
+  type="number"
+  min={10}
+  max={24}
+  value={values.fontSize}
+  onChange={(e) => onChange({ fontSize: Number(e.target.value) })}
+/>
+
+// 例: 機能トグル
+<input
+  type="checkbox"
+  checked={values.typewriterScrolling}
+  onChange={(e) => onChange({ typewriterScrolling: e.target.checked })}
+/>
+```
+
+部分更新パターン（`Partial<EditorSettings>`）により、各コントロールは他の設定を知ることなく自分のフィールドのみを更新できます。

@@ -1,0 +1,241 @@
+---
+title: パレットベースのテーマシステム
+description: ANSI スタイルのパレット、color-mix() による不透明度、HighlightStyle タグマッピングを使い、CSS カスタムプロパティで完全に駆動される CodeMirror テーマの作成方法。
+sidebar_position: 7
+---
+
+# パレットベースのテーマシステム
+
+このページでは、ANSI ターミナルパレット規則に従う CSS カスタムプロパティからすべての色を取得するテーマアーキテクチャを解説します。CSS 変数が変更されるとエディターの外観が自動的に更新され、テーマの再構築や再設定は不要です。
+
+## パレット
+
+カラースキームは親要素の CSS カスタムプロパティとして定義されます。
+
+```css
+:root {
+  --palette-fg: #c0c0c0;
+  --palette-bg: #1e1e2e;
+  --palette-cursor: #f5e0dc;
+  --palette-selection: rgba(88, 91, 112, 0.5);
+
+  /* ANSI スタイルのパレット: 0-15 */
+  --palette-0: #11111b; /* black   -- サーフェス、ガター */
+  --palette-1: #f38ba8; /* red     -- 不正、エラー */
+  --palette-2: #a6e3a1; /* green   -- 文字列 */
+  --palette-3: #f9e2af; /* yellow  -- 数値、型 */
+  --palette-4: #89b4fa; /* blue    -- キーワード、見出し */
+  --palette-5: #cba6f7; /* magenta -- 関数、タグ */
+  --palette-6: #94e2d5; /* cyan    -- 演算子、リンク */
+  --palette-7: #bac2de; /* white   -- 句読点 */
+  --palette-8: #585b70; /* bright black -- コメント */
+  --palette-15: #6c7086; /* bright white -- 行番号 */
+}
+```
+
+このパレットは伝統的な 16 色 ANSI ターミナル規則にマッピングされ、シンタックスハイライトのカテゴリーへの自然なマッピングを提供します。
+
+## エディター UI テーマ
+
+エディターテーマはすべての色に CSS カスタムプロパティを使った `EditorView.theme()` を使用します。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+function createEditorColorTheme(isDark: boolean) {
+  const baseTheme = EditorView.theme(
+    {
+      "&": {
+        color: "var(--palette-fg)",
+        backgroundColor: "var(--palette-bg)",
+      },
+      ".cm-content": {
+        caretColor: "var(--palette-cursor)",
+      },
+      ".cm-cursor, .cm-dropCursor": {
+        borderLeftColor: "var(--palette-cursor)",
+      },
+      "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+        {
+          backgroundColor: "var(--palette-selection)",
+        },
+      ".cm-panels": {
+        backgroundColor: "var(--palette-0)",
+        color: "var(--palette-fg)",
+      },
+      ".cm-gutters": {
+        backgroundColor: "var(--palette-bg)",
+        color: "var(--palette-15)",
+        border: "none",
+      },
+    },
+    { dark: isDark },
+  );
+
+  // ... (以下のハイライトスタイル)
+  return [baseTheme];
+}
+```
+
+`isDark` パラメーターは、これがダークテーマであることを CodeMirror に伝え、明示的にスタイル指定されていない UI 要素のデフォルトスタイルに影響します。
+
+## color-mix() による不透明度
+
+半透明のオーバーレイ（アクティブ行、検索マッチ、選択マッチ）では、`oklch` 色空間の `color-mix()` を使用します。
+
+```ts
+".cm-activeLine": {
+  backgroundColor: "color-mix(in oklch, var(--palette-fg) 4%, transparent)",
+},
+".cm-searchMatch": {
+  backgroundColor: "color-mix(in oklch, var(--palette-3) 30%, transparent)",
+  outline: "1px solid color-mix(in oklch, var(--palette-3) 50%, transparent)",
+},
+".cm-searchMatch.cm-searchMatch-selected": {
+  backgroundColor: "color-mix(in oklch, var(--palette-3) 50%, transparent)",
+},
+".cm-selectionMatch": {
+  backgroundColor: "color-mix(in oklch, var(--palette-selection) 50%, transparent)",
+},
+"&.cm-focused .cm-matchingBracket, &.cm-focused .cm-nonmatchingBracket": {
+  backgroundColor: "color-mix(in oklch, var(--palette-4) 25%, transparent)",
+},
+```
+
+<Tip>
+
+`color-mix(in oklch, var(--some-color) 30%, transparent)` はハードコードされた値の `rgba()` に代わるモダン CSS の手法です。任意の色形式で動作し、oklch 色空間で知覚的に均一なブレンディングを生成します。追加の変数を定義することなく、不透明なカスタムプロパティから半透明のバリアントを導出できます。
+
+</Tip>
+
+## HighlightStyle によるシンタックスハイライト
+
+ハイライトスタイルは Lezer タグをパレットの色にマッピングします。
+
+```ts
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const highlightStyle = HighlightStyle.define([
+  // コメント
+  { tag: tags.comment, color: "var(--palette-8)" },
+
+  // キーワードと制御フロー
+  { tag: tags.keyword, color: "var(--palette-4)" },
+
+  // 関数とタグ
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.definition(tags.variableName)),
+      tags.tagName,
+    ],
+    color: "var(--palette-5)",
+  },
+
+  // 文字列
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--palette-2)" },
+  { tag: tags.regexp, color: "var(--palette-6)" },
+  { tag: tags.escape, color: "var(--palette-6)" },
+
+  // 数値、ブール値、型
+  {
+    tag: [tags.number, tags.bool, tags.null, tags.typeName, tags.className, tags.namespace],
+    color: "var(--palette-3)",
+  },
+
+  // 変数とプロパティ
+  { tag: [tags.variableName, tags.definition(tags.variableName)], color: "var(--palette-fg)" },
+  { tag: [tags.propertyName, tags.definition(tags.propertyName)], color: "var(--palette-4)" },
+
+  // 演算子と句読点
+  { tag: tags.operator, color: "var(--palette-6)" },
+  { tag: tags.punctuation, color: "var(--palette-7)" },
+  { tag: [tags.derefOperator, tags.separator], color: "var(--palette-fg)" },
+
+  // HTML/JSX 属性
+  { tag: tags.attributeName, color: "var(--palette-3)" },
+  { tag: tags.attributeValue, color: "var(--palette-2)" },
+
+  // Markdown マークアップ
+  { tag: tags.heading, color: "var(--palette-4)", fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic", color: "var(--palette-5)" },
+  { tag: tags.strong, fontWeight: "bold", color: "var(--palette-3)" },
+  { tag: [tags.link, tags.url], color: "var(--palette-6)", textDecoration: "underline" },
+  { tag: tags.quote, color: "var(--palette-8)", fontStyle: "italic" },
+  { tag: tags.monospace, color: "var(--palette-2)" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+
+  // メタと不正
+  { tag: tags.meta, color: "var(--palette-8)" },
+  { tag: tags.invalid, color: "var(--palette-1)" },
+]);
+```
+
+### パレットからシンタックスへのマッピング
+
+| パレットスロット | ANSI カラー | シンタックスカテゴリー |
+| --- | --- | --- |
+| `--palette-1` | Red | 不正なトークン |
+| `--palette-2` | Green | 文字列、属性値、等幅 |
+| `--palette-3` | Yellow | 数値、型、ブール値、属性、太字テキスト |
+| `--palette-4` | Blue | キーワード、プロパティ、見出し |
+| `--palette-5` | Magenta | 関数、タグ、強調 |
+| `--palette-6` | Cyan | 演算子、正規表現、エスケープシーケンス、リンク |
+| `--palette-7` | White | 句読点 |
+| `--palette-8` | Bright black | コメント、引用、メタ |
+| `--palette-15` | Bright white | 行番号 |
+| `--palette-fg` | Foreground | 変数、セパレーター、デリファレンス演算子 |
+
+## 完全なテーマを返す
+
+関数はエディターテーマとシンタックスハイライトの両方を Extension の配列として返します。
+
+```ts
+function createEditorColorTheme(isDark: boolean): Extension[] {
+  const baseTheme = EditorView.theme({ /* ... */ }, { dark: isDark });
+  const highlightStyle = HighlightStyle.define([ /* ... */ ]);
+  return [baseTheme, syntaxHighlighting(highlightStyle)];
+}
+```
+
+## 使い方
+
+```ts
+const extensions = [
+  ...createEditorColorTheme(isDark),
+  // ... other extensions
+];
+```
+
+ランタイムでテーマを切り替えるには、親要素の CSS カスタムプロパティの値を変更するだけです。`HighlightStyle.define()` は `var()` 参照（解決された値ではなく）を使用するため、CodeMirror を再設定せずに CSS を通じて色が更新されます。
+
+<Note>
+
+`EditorView.theme()` に渡される `isDark` パラメーターは、エディター作成時に設定される静的なブール値です。ユーザーがライトテーマとダークテーマを切り替える場合、正しい `isDark` 値でエディターを再作成する必要があります。これは、明示的にテーマ指定されていない要素の CodeMirror のデフォルトフォールバックスタイルにのみ影響します。
+
+</Note>
+
+## ツールチップとパネルのスタイリング
+
+テーマはツールチップ、パネル、折りたたみプレースホルダーもカバーし、視覚的な一貫性を維持します。
+
+```ts
+".cm-tooltip": {
+  border: "1px solid var(--palette-0)",
+  backgroundColor: "var(--palette-bg)",
+},
+".cm-tooltip-autocomplete": {
+  "& > ul > li[aria-selected]": {
+    backgroundColor: "var(--palette-selection)",
+    color: "var(--palette-fg)",
+  },
+},
+".cm-foldPlaceholder": {
+  backgroundColor: "transparent",
+  border: "none",
+  color: "var(--palette-8)",
+},
+```
+
+エディター内のすべての可視サーフェスがパレットの色を使用し、どのカラースキームがアクティブであってもエディターが正しく表示されます。

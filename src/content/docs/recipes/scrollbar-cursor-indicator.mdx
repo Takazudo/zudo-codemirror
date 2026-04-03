@@ -1,0 +1,193 @@
+---
+title: Scrollbar Cursor Indicator
+description: Show the cursor position as a thin horizontal line on the scrollbar track using a ViewPlugin with DOM manipulation.
+sidebar_position: 10
+---
+
+# Scrollbar Cursor Indicator
+
+This recipe builds a CodeMirror extension that displays the cursor's position as a thin horizontal line on the scrollbar track, similar to the minimap cursor indicator in VS Code. It gives users a quick visual reference of where they are in a long document.
+
+## Overview
+
+The extension creates a small `<div>` element positioned absolutely inside the editor's DOM. The element is positioned vertically based on the cursor's relative position in the document. It updates on selection changes, document changes, and geometry changes.
+
+## Implementation
+
+```ts
+import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const SCROLLBAR_WIDTH = "14px";
+
+function scrollbarCursorIndicator() {
+  return ViewPlugin.fromClass(
+    class {
+      private indicator: HTMLDivElement;
+      private pendingFrame = 0;
+      private focused: boolean;
+      private readonly onFocus: () => void;
+      private readonly onBlur: () => void;
+
+      constructor(private view: EditorView) {
+        this.indicator = document.createElement("div");
+        Object.assign(this.indicator.style, {
+          position: "absolute",
+          right: "0",
+          width: SCROLLBAR_WIDTH,
+          height: "2px",
+          pointerEvents: "none",
+          zIndex: "10",
+          background: "var(--palette-cursor)",
+        });
+        view.dom.appendChild(this.indicator);
+
+        this.focused = view.hasFocus;
+        this.updatePosition();
+
+        this.onFocus = () => {
+          this.focused = true;
+          this.updatePosition();
+        };
+        this.onBlur = () => {
+          this.focused = false;
+          this.indicator.style.display = "none";
+        };
+        view.dom.addEventListener("focusin", this.onFocus);
+        view.dom.addEventListener("focusout", this.onBlur);
+      }
+
+      update(update: ViewUpdate) {
+        if (
+          update.selectionSet ||
+          update.docChanged ||
+          update.geometryChanged
+        ) {
+          if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+          this.pendingFrame = requestAnimationFrame(() => {
+            this.pendingFrame = 0;
+            this.updatePosition();
+          });
+        }
+      }
+
+      private updatePosition() {
+        if (!this.focused) {
+          this.indicator.style.display = "none";
+          return;
+        }
+
+        const { scrollDOM, state } = this.view;
+        const { scrollHeight, clientHeight } = scrollDOM;
+
+        // Hide when content doesn't scroll
+        if (scrollHeight <= clientHeight) {
+          this.indicator.style.display = "none";
+          return;
+        }
+        this.indicator.style.display = "";
+
+        const head = state.selection.main.head;
+        const block = this.view.lineBlockAt(head);
+        const contentH = this.view.contentHeight;
+        const ratio = contentH > 0 ? block.top / contentH : 0;
+        const scrollerTop = scrollDOM.offsetTop;
+        const trackHeight = clientHeight;
+        this.indicator.style.top = `${scrollerTop + ratio * trackHeight}px`;
+      }
+
+      destroy() {
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+        this.view.dom.removeEventListener("focusin", this.onFocus);
+        this.view.dom.removeEventListener("focusout", this.onBlur);
+        this.indicator.remove();
+      }
+    },
+  );
+}
+```
+
+## Key Design Decisions
+
+### Position Calculation
+
+The indicator's vertical position is calculated as a ratio of the cursor's line position to the total content height:
+
+```
+ratio = lineBlock.top / contentHeight
+indicatorTop = scrollerTop + ratio * trackHeight
+```
+
+`lineBlockAt(head)` returns the visual line block at the cursor position, giving us the pixel offset from the top of the content. Dividing by `contentHeight` gives a 0-to-1 ratio that maps to the scrollbar track.
+
+<Note>
+
+The extension uses `contentHeight` (the height of actual document content) rather than `scrollHeight` (which may include `scrollPastEnd()` padding). This prevents the indicator from being pushed to an artificially low position when the editor has extra scrollable space after the last line.
+
+</Note>
+
+### Focus-Aware Visibility
+
+The indicator is only shown when the editor has focus. In a split-pane editor, multiple CodeMirror instances may be visible simultaneously. Without focus awareness, each pane would show its own indicator, creating visual clutter.
+
+```ts
+this.onFocus = () => {
+  this.focused = true;
+  this.updatePosition();
+};
+this.onBlur = () => {
+  this.focused = false;
+  this.indicator.style.display = "none";
+};
+```
+
+The plugin initializes `this.focused` from `view.hasFocus` rather than defaulting to `true`. This handles cases where the editor is created without receiving focus (such as a newly opened split pane).
+
+### DOM Approach vs Decoration
+
+This extension uses direct DOM manipulation (appending a `<div>` to `view.dom`) rather than CodeMirror decorations. This is because the indicator is positioned relative to the scrollbar, not relative to document content. Decorations are designed to annotate document ranges and would not work for an overlay on the scrollbar track.
+
+### requestAnimationFrame
+
+Position updates are batched with `requestAnimationFrame` to avoid layout thrashing when multiple events fire in quick succession (e.g., typing rapidly).
+
+## Cleanup
+
+The `destroy` method removes the indicator element, cancels pending animation frames, and removes event listeners:
+
+```ts
+destroy() {
+  if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+  this.view.dom.removeEventListener("focusin", this.onFocus);
+  this.view.dom.removeEventListener("focusout", this.onBlur);
+  this.indicator.remove();
+}
+```
+
+<Warning>
+
+Always remove event listeners in the `destroy` method. Without cleanup, listeners would accumulate if the extension is reconfigured or the editor is recreated.
+
+</Warning>
+
+## Usage
+
+```ts
+const extensions = [
+  // ... other extensions
+  scrollbarCursorIndicator(),
+];
+```
+
+To change the indicator color, set a CSS custom property:
+
+```css
+.my-editor {
+  --palette-cursor: #528bff;
+}
+```
+
+Or modify the `background` value in the indicator style to use a fixed color:
+
+```ts
+background: "rgba(82, 139, 255, 0.8)",
+```

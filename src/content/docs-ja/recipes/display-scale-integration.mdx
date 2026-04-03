@@ -1,0 +1,140 @@
+---
+title: 表示スケールの統合
+description: JavaScript でスケーリングされた値を計算し、EditorView.theme() で適用することで、CodeMirror をグローバルな表示スケール係数に対応させる方法。
+sidebar_position: 12
+---
+
+# 表示スケールの統合
+
+このレシピでは、CodeMirror エディターをグローバルな表示スケール係数に対応させる方法を示します。表示スケールは、エディターのフォントサイズとパディングを均一にスケーリングする乗数（例: 1.0, 1.25, 1.5）で、ユーザーがブラウザのズームレベルとは独立してエディターを拡大縮小できるようにします。
+
+## パターン
+
+このアプローチは、JavaScript でスケーリングされたピクセル値を計算し、`EditorView.theme()` で適用します。これはエディター作成時に行われ、スケール係数が変更されるとエディターが再作成されます。
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const settings = {
+  fontSize: 14,
+  fontFamily: "Menlo",
+  lineHeight: 1.6,
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+};
+
+const displayScale = 1.25;
+
+const scaledFontSize = settings.fontSize * displayScale;
+const scaledPaddingH = settings.paddingHorizontal * displayScale;
+const scaledPaddingV = settings.paddingVertical * displayScale;
+
+const editorTheme = EditorView.theme({
+  ".cm-scroller": {
+    fontFamily: `"${settings.fontFamily}", monospace`,
+    fontSize: `${scaledFontSize}px`,
+    lineHeight: String(settings.lineHeight),
+  },
+  ".cm-content": {
+    padding: `${scaledPaddingV}px 0`,
+  },
+  ".cm-line": {
+    paddingLeft: `${scaledPaddingH}px`,
+    paddingRight: `${scaledPaddingH}px`,
+  },
+});
+```
+
+## スケーリングされるもの
+
+| プロパティ | 基本値 | 1.25x での値 |
+| --- | --- | --- |
+| フォントサイズ | 14px | 17.5px |
+| 水平パディング | 16px | 20px |
+| 垂直パディング | 12px | 15px |
+
+行の高さは単位なしの比率（例: 1.6）であり、フォントサイズに対して相対的なため、スケーリングは不要です。フォントサイズに応じて自動的に調整されます。
+
+## なぜ CSS ではなく JavaScript でスケーリングするのか？
+
+代替アプローチとして、CSS の `transform: scale()` や `calc()` を使った CSS カスタムプロパティ（`--display-scale`）があります。しかし、JavaScript と `EditorView.theme()` によるスケーリングには利点があります。
+
+- **ピクセル精度の値** -- CodeMirror はカーソル位置決め、行高さの計算、ビューポート測定に正確なフォントサイズが必要です。CSS transform はサブピクセルレンダリングの問題を引き起こす可能性があります。
+- **レイアウトの混乱なし** -- CSS `transform: scale()` は要素のレイアウトサイズを変更しないため、CodeMirror のスクロール計算が壊れます。
+- **ガターの配置** -- 行番号が表示される場合、ガターのパディングもスケーリングする必要があります。計算された値を使えば簡単です。
+
+```ts
+const themeRules: Record<string, Record<string, string>> = {
+  ".cm-scroller": {
+    fontFamily: `"${settings.fontFamily}", monospace`,
+    fontSize: `${scaledFontSize}px`,
+    lineHeight: String(settings.lineHeight),
+  },
+  ".cm-content": {
+    padding: `${scaledPaddingV}px 0`,
+  },
+  ".cm-line": {
+    paddingLeft: `${scaledPaddingH}px`,
+    paddingRight: `${scaledPaddingH}px`,
+  },
+};
+
+// 行番号が表示される場合はガターのパディングもスケーリング
+if (showLineNumbers) {
+  themeRules[".cm-gutters"] = {
+    paddingTop: `${scaledPaddingV}px`,
+  };
+}
+
+const editorTheme = EditorView.theme(themeRules);
+```
+
+## CSS カスタムプロパティとの統合
+
+アプリケーションの他の部分（CodeMirror の外側）はスケーリングに CSS カスタムプロパティを使用する場合があります。
+
+```css
+:root {
+  --display-scale: 1.25;
+}
+
+.sidebar {
+  font-size: calc(13px * var(--display-scale));
+}
+```
+
+CodeMirror はこの CSS プロパティを直接使用しません。代わりに、JavaScript レイヤーが設定オブジェクトから同じスケール値を読み取り、ピクセル値を計算します。これにより、UI の他の部分が CSS アプローチを使用しながら、CodeMirror の内部測定値は正確に保たれます。
+
+## 再作成 vs 再設定
+
+このパターンでは、表示スケールが変更されるとエディターが再作成されます。`EditorView.theme()` は作成時にスコープされた CSS ルールを生成し、それらはその場で更新できないため、これが最もシンプルなアプローチです。
+
+```ts
+// React hook の例
+useEffect(() => {
+  const editorTheme = EditorView.theme({
+    ".cm-scroller": {
+      fontSize: `${settings.fontSize * displayScale}px`,
+    },
+  });
+
+  const view = new EditorView({
+    state: EditorState.create({ doc: content, extensions: [editorTheme] }),
+    parent: containerRef.current,
+  });
+
+  return () => view.destroy();
+}, [settings, displayScale]);
+```
+
+<Note>
+
+表示スケールの変更時にエディターを再作成するのは適切です。これはまれな操作（設定でユーザーが調整し、アクティブなタイピング中ではない）であり、`EditorView` の破棄と再作成のコストは、動的なテーマルール更新の複雑さに比べて低いためです。
+
+</Note>
+
+<Tip>
+
+エディターを再作成する際は、ドキュメントの内容とスクロール位置を保持してください。現在の内容を初期 `doc` として渡し、新しいビューが作成された後に `scrollDOM.scrollTop` を復元します。
+
+</Tip>
