@@ -1,0 +1,254 @@
+---
+title: Settings-Driven Editor Configuration
+description: Configure CodeMirror entirely from an application settings object, using compartments for runtime reconfiguration and a shared schema for validation.
+sidebar_position: 13
+---
+
+# Settings-Driven Editor Configuration
+
+This recipe documents the pattern of configuring a CodeMirror editor entirely from an application settings object. All editor behavior -- font, indentation, feature toggles -- flows from a single settings source, validated by a shared schema.
+
+## The Settings Object
+
+The editor settings are a plain object with typed fields:
+
+```ts
+interface EditorSettings {
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+  paddingHorizontal: number;
+  paddingVertical: number;
+  indentType: "tab" | "spaces";
+  indentSize: number;
+  vimMode: boolean;
+  typewriterScrolling: boolean;
+  showIndentGuides: boolean;
+  bracketColorization: boolean;
+  markdownListIndent: boolean;
+  listHangingIndent: boolean;
+  showStatusBar: boolean;
+}
+```
+
+Default values are defined in a shared package so that both the frontend and the settings validation logic use the same defaults:
+
+```ts
+const defaultEditorSettings: EditorSettings = {
+  fontFamily: "Menlo",
+  fontSize: 14,
+  lineHeight: 1.6,
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+  indentType: "spaces",
+  indentSize: 2,
+  vimMode: false,
+  typewriterScrolling: false,
+  showIndentGuides: true,
+  bracketColorization: true,
+  markdownListIndent: true,
+  listHangingIndent: true,
+  showStatusBar: true,
+};
+```
+
+## Mapping Settings to Extensions
+
+Each setting maps to one or more CodeMirror extensions or configuration options. The extensions array is built dynamically based on the current settings:
+
+```ts
+import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, scrollPastEnd } from "@codemirror/view";
+import { indentUnit } from "@codemirror/language";
+import { indentWithTab } from "@codemirror/commands";
+import { vim } from "@replit/codemirror-vim";
+
+function buildExtensions(settings: EditorSettings) {
+  return [
+    // Vim mode (conditional)
+    ...(settings.vimMode ? [vim()] : []),
+
+    // Font and layout via theme
+    EditorView.theme({
+      ".cm-scroller": {
+        fontFamily: `"${settings.fontFamily}", monospace`,
+        fontSize: `${settings.fontSize}px`,
+        lineHeight: String(settings.lineHeight),
+      },
+      ".cm-content": {
+        padding: `${settings.paddingVertical}px 0`,
+      },
+      ".cm-line": {
+        paddingLeft: `${settings.paddingHorizontal}px`,
+        paddingRight: `${settings.paddingHorizontal}px`,
+      },
+    }),
+
+    // Indentation
+    EditorState.tabSize.of(settings.indentSize),
+    indentUnit.of(
+      settings.indentType === "tab"
+        ? "\t"
+        : " ".repeat(settings.indentSize),
+    ),
+    keymap.of([indentWithTab]),
+
+    // Feature toggles
+    ...(settings.markdownListIndent ? [markdownListIndent()] : []),
+    ...(settings.listHangingIndent ? [listHangingIndent()] : []),
+    ...(settings.showIndentGuides ? [indentGuides()] : []),
+    ...(settings.typewriterScrolling ? [typewriterScrolling()] : []),
+    ...(settings.bracketColorization ? [bracketColorize()] : []),
+
+    scrollPastEnd(),
+  ];
+}
+```
+
+### Font Configuration
+
+Font family, size, line height, and padding are all applied via `EditorView.theme()`. These values cannot be set as CSS custom properties *for CodeMirror* because CodeMirror needs exact pixel values for its internal layout calculations.
+
+### Indentation
+
+Two CodeMirror primitives control indentation:
+
+- `EditorState.tabSize.of(n)` -- Sets the visual width of tab characters
+- `indentUnit.of(unit)` -- Sets what gets inserted when the user presses Tab. A `"\t"` string inserts a tab character; a string of spaces inserts that many spaces
+
+### Feature Toggles
+
+Optional extensions are conditionally included using the spread operator with a ternary:
+
+```ts
+...(settings.typewriterScrolling ? [typewriterScrolling()] : []),
+```
+
+This pattern is clear and avoids nested if-else blocks. Each toggle adds or omits the corresponding extension.
+
+## Compartments for Runtime Reconfiguration
+
+Some settings can be changed at runtime without recreating the editor. CodeMirror [Compartments](/docs/extensions/compartments/) make this possible.
+
+```ts
+const readOnlyCompartment = new Compartment();
+
+const extensions = [
+  readOnlyCompartment.of(EditorState.readOnly.of(false)),
+  // ... other extensions
+];
+
+// Later, toggle readOnly:
+view.dispatch({
+  effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(true)),
+});
+```
+
+Compartments are useful for settings that change frequently (like read-only mode in a split pane). For settings that change infrequently (like font size or vim mode), recreating the editor is simpler and avoids the complexity of managing many compartments.
+
+<Tip>
+
+A practical guideline: use compartments for settings that change during active editing (read-only toggle, line wrapping). Recreate the editor for settings that change via a settings dialog (font, indentation, feature toggles). The cost of recreating an `EditorView` is low because CodeMirror is designed for fast initialization.
+
+</Tip>
+
+## Validation and Defaults
+
+A shared schema package validates settings and applies defaults:
+
+```ts
+function validateEditorSettings(input: Partial<EditorSettings>): EditorSettings {
+  return {
+    fontFamily: input.fontFamily || defaultEditorSettings.fontFamily,
+    fontSize: clamp(input.fontSize ?? defaultEditorSettings.fontSize, 10, 24),
+    lineHeight: input.lineHeight ?? defaultEditorSettings.lineHeight,
+    paddingHorizontal: clamp(
+      input.paddingHorizontal ?? defaultEditorSettings.paddingHorizontal,
+      0,
+      48,
+    ),
+    paddingVertical: clamp(
+      input.paddingVertical ?? defaultEditorSettings.paddingVertical,
+      0,
+      48,
+    ),
+    indentType: input.indentType === "tab" ? "tab" : "spaces",
+    indentSize: clamp(input.indentSize ?? defaultEditorSettings.indentSize, 1, 8),
+    vimMode: input.vimMode ?? defaultEditorSettings.vimMode,
+    typewriterScrolling: input.typewriterScrolling ?? defaultEditorSettings.typewriterScrolling,
+    showIndentGuides: input.showIndentGuides ?? defaultEditorSettings.showIndentGuides,
+    bracketColorization: input.bracketColorization ?? defaultEditorSettings.bracketColorization,
+    markdownListIndent: input.markdownListIndent ?? defaultEditorSettings.markdownListIndent,
+    listHangingIndent: input.listHangingIndent ?? defaultEditorSettings.listHangingIndent,
+    showStatusBar: input.showStatusBar ?? defaultEditorSettings.showStatusBar,
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+```
+
+This validation ensures that regardless of what a user puts in the settings file, the editor always receives safe values within expected ranges. The same validation function is used on both the backend (when reading settings from disk) and the frontend (before passing to CodeMirror).
+
+## React Integration Pattern
+
+In a React application, the editor is recreated when settings change via a `useEffect` dependency:
+
+```ts
+useEffect(() => {
+  if (!containerRef.current || !settings) return;
+
+  const extensions = buildExtensions(settings);
+  const state = EditorState.create({ doc: content, extensions });
+  const view = new EditorView({ state, parent: containerRef.current });
+
+  return () => view.destroy();
+}, [settings]);
+```
+
+The `settings` object is memoized so the effect only re-runs when actual values change:
+
+```ts
+const settings = useMemo(
+  () => appSettings
+    ? { ...defaultEditorSettings, ...appSettings.editor }
+    : null,
+  [appSettings],
+);
+```
+
+<Note>
+
+When the editor is recreated, the document content and scroll position should be preserved. The `content` prop provides the current document, and scroll position can be saved and restored via `view.scrollDOM.scrollTop`.
+
+</Note>
+
+## Settings UI
+
+Each setting corresponds to a form control in the settings UI. The settings page dispatches partial updates that are merged with the current settings:
+
+```ts
+interface EditorSettingsProps {
+  values: EditorSettings;
+  onChange: (values: Partial<EditorSettings>) => void;
+}
+
+// Example: font size input
+<input
+  type="number"
+  min={10}
+  max={24}
+  value={values.fontSize}
+  onChange={(e) => onChange({ fontSize: Number(e.target.value) })}
+/>
+
+// Example: feature toggle
+<input
+  type="checkbox"
+  checked={values.typewriterScrolling}
+  onChange={(e) => onChange({ typewriterScrolling: e.target.checked })}
+/>
+```
+
+The partial update pattern (`Partial<EditorSettings>`) allows each control to update only its own field without knowing about other settings.

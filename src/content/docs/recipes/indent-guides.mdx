@@ -1,0 +1,204 @@
+---
+title: Indent Guides
+description: Render vertical indent guide lines in CodeMirror using line decorations, CSS custom properties, and a repeating linear gradient.
+sidebar_position: 8
+---
+
+# Indent Guides
+
+This recipe builds a CodeMirror extension that renders vertical indent guide lines at each indentation level. The guides are drawn entirely with CSS -- no canvas or SVG -- using a repeating linear gradient on a pseudo-element.
+
+## Overview
+
+The approach works as follows:
+
+1. For each visible line, count the indentation level (number of leading spaces or tabs)
+2. Add a line decoration with a CSS custom property `--indent-level` set to the level count
+3. A `::before` pseudo-element draws vertical lines using a repeating gradient
+
+## Counting Indentation
+
+The indent counter converts both spaces and tabs to a uniform level based on a fixed unit width. For markdown, the convention is 2-space indentation for nested lists.
+
+```ts
+const INDENT_UNIT = 2;
+const MAX_INDENT_LEVEL = 10;
+
+function countIndentLevel(line: string): number {
+  let spaces = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === " ") {
+      spaces++;
+    } else if (line[i] === "\t") {
+      spaces += INDENT_UNIT;
+    } else {
+      break;
+    }
+  }
+  // Skip whitespace-only lines -- no guides on blank lines
+  if (spaces >= line.length) return 0;
+  return Math.min(Math.floor(spaces / INDENT_UNIT), MAX_INDENT_LEVEL);
+}
+```
+
+<Note>
+
+Whitespace-only lines return 0 to avoid drawing guides on blank lines. This prevents distracting vertical lines in empty regions of the document. `MAX_INDENT_LEVEL` caps the decoration count to guard against pathological input.
+
+</Note>
+
+## Building Line Decorations
+
+For each visible line with indentation, a line decoration sets the `--indent-level` custom property. The CSS theme uses this value to determine the width of the gradient area.
+
+```ts
+import {
+  ViewPlugin,
+  Decoration,
+  DecorationSet,
+  EditorView,
+  ViewUpdate,
+} from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+function buildDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from;
+    while (pos <= to) {
+      const line = view.state.doc.lineAt(pos);
+      const level = countIndentLevel(line.text);
+
+      if (level > 0) {
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({
+            attributes: {
+              class: "cm-indent-guides",
+              style: `--indent-level: ${level}`,
+            },
+          }),
+        );
+      }
+
+      pos = line.to + 1;
+    }
+  }
+
+  return builder.finish();
+}
+```
+
+## The ViewPlugin
+
+The plugin rebuilds decorations on document changes and viewport scrolling.
+
+```ts
+const indentGuidesPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+## CSS Theme: The Repeating Gradient Technique
+
+The theme uses a `::before` pseudo-element with a repeating linear gradient to draw the guide lines. Each "column" is `2ch` wide (matching `INDENT_UNIT`), with a 1px line at the left edge.
+
+```ts
+const indentGuidesTheme = EditorView.baseTheme({
+  ".cm-indent-guides": {
+    position: "relative",
+  },
+  ".cm-indent-guides::before": {
+    content: '""',
+    position: "absolute",
+    top: "0",
+    bottom: "0",
+    left: "calc(-1 * var(--cm-hang, 0px))",
+    width: "calc(2ch * var(--indent-level, 0))",
+    paddingLeft: "inherit",
+    backgroundImage: [
+      "repeating-linear-gradient(to right,",
+      "color-mix(in oklch, var(--palette-fg) 12%, transparent) 0px,",
+      "color-mix(in oklch, var(--palette-fg) 12%, transparent) 1px,",
+      "transparent 1px,",
+      "transparent 2ch)",
+    ].join(" "),
+    backgroundOrigin: "content-box",
+    backgroundRepeat: "no-repeat",
+    pointerEvents: "none",
+  },
+});
+```
+
+How this works:
+
+- **`width: calc(2ch * var(--indent-level, 0))`** -- The pseudo-element is exactly wide enough to cover all indentation columns
+- **`repeating-linear-gradient`** -- Draws a 1px vertical line every `2ch`, creating one guide per indent level
+- **`color-mix(in oklch, var(--palette-fg) 12%, transparent)`** -- Makes the guides subtly visible by mixing the foreground color at 12% opacity. This adapts automatically to light and dark themes
+- **`backgroundOrigin: content-box`** with `paddingLeft: inherit` -- Ensures the gradient starts after the editor's horizontal padding
+- **`left: calc(-1 * var(--cm-hang, 0px))`** -- Offsets the pseudo-element to compensate for the hanging indent applied by a list-hanging-indent extension (see [Markdown List Handling](/docs/recipes/markdown-list-handling/))
+- **`pointerEvents: none`** -- Prevents the pseudo-element from intercepting clicks
+
+<Tip>
+
+The `ch` unit is based on the width of the `0` character in the current font. This works well with monospace fonts. With proportional fonts, the guide alignment will be approximate.
+
+</Tip>
+
+## Exporting the Extension
+
+```ts
+import type { Extension } from "@codemirror/state";
+
+function indentGuides(): Extension {
+  return [indentGuidesPlugin, indentGuidesTheme];
+}
+```
+
+## Usage
+
+```ts
+const extensions = [
+  // ... other extensions
+  indentGuides(),
+];
+```
+
+To change the guide color, override the CSS custom property used in `color-mix`. Alternatively, replace the gradient in your application's theme:
+
+```ts
+const customGuideTheme = EditorView.theme({
+  ".cm-indent-guides::before": {
+    backgroundImage: [
+      "repeating-linear-gradient(to right,",
+      "rgba(128, 128, 128, 0.15) 0px,",
+      "rgba(128, 128, 128, 0.15) 1px,",
+      "transparent 1px,",
+      "transparent 2ch)",
+    ].join(" "),
+  },
+});
+```
+
+<Warning>
+
+Line decorations are applied to `.cm-line` elements. If another extension (such as hanging indent) also adds line decorations with `margin-left` or `text-indent`, the indent guides pseudo-element must account for the offset. The `left: calc(-1 * var(--cm-hang, 0px))` pattern shown above handles this by reading a CSS custom property set by the hanging indent extension.
+
+</Warning>

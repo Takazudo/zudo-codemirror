@@ -1,0 +1,193 @@
+---
+title: スクロールバーのカーソルインジケーター
+description: ViewPlugin と DOM 操作を使用して、カーソル位置をスクロールバートラック上の細い水平線として表示する方法。
+sidebar_position: 10
+---
+
+# スクロールバーのカーソルインジケーター
+
+このレシピでは、VS Code のミニマップカーソルインジケーターのように、カーソルの位置をスクロールバートラック上の細い水平線として表示する CodeMirror Extension を構築します。長いドキュメントでの現在位置を素早く視覚的に確認できます。
+
+## 概要
+
+この Extension は、エディターの DOM 内に絶対位置で配置された小さな `<div>` 要素を作成します。この要素は、ドキュメント内のカーソルの相対位置に基づいて垂直方向に配置されます。選択変更、ドキュメント変更、ジオメトリ変更時に更新されます。
+
+## 実装
+
+```ts
+import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const SCROLLBAR_WIDTH = "14px";
+
+function scrollbarCursorIndicator() {
+  return ViewPlugin.fromClass(
+    class {
+      private indicator: HTMLDivElement;
+      private pendingFrame = 0;
+      private focused: boolean;
+      private readonly onFocus: () => void;
+      private readonly onBlur: () => void;
+
+      constructor(private view: EditorView) {
+        this.indicator = document.createElement("div");
+        Object.assign(this.indicator.style, {
+          position: "absolute",
+          right: "0",
+          width: SCROLLBAR_WIDTH,
+          height: "2px",
+          pointerEvents: "none",
+          zIndex: "10",
+          background: "var(--palette-cursor)",
+        });
+        view.dom.appendChild(this.indicator);
+
+        this.focused = view.hasFocus;
+        this.updatePosition();
+
+        this.onFocus = () => {
+          this.focused = true;
+          this.updatePosition();
+        };
+        this.onBlur = () => {
+          this.focused = false;
+          this.indicator.style.display = "none";
+        };
+        view.dom.addEventListener("focusin", this.onFocus);
+        view.dom.addEventListener("focusout", this.onBlur);
+      }
+
+      update(update: ViewUpdate) {
+        if (
+          update.selectionSet ||
+          update.docChanged ||
+          update.geometryChanged
+        ) {
+          if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+          this.pendingFrame = requestAnimationFrame(() => {
+            this.pendingFrame = 0;
+            this.updatePosition();
+          });
+        }
+      }
+
+      private updatePosition() {
+        if (!this.focused) {
+          this.indicator.style.display = "none";
+          return;
+        }
+
+        const { scrollDOM, state } = this.view;
+        const { scrollHeight, clientHeight } = scrollDOM;
+
+        // コンテンツがスクロールしない場合は非表示
+        if (scrollHeight <= clientHeight) {
+          this.indicator.style.display = "none";
+          return;
+        }
+        this.indicator.style.display = "";
+
+        const head = state.selection.main.head;
+        const block = this.view.lineBlockAt(head);
+        const contentH = this.view.contentHeight;
+        const ratio = contentH > 0 ? block.top / contentH : 0;
+        const scrollerTop = scrollDOM.offsetTop;
+        const trackHeight = clientHeight;
+        this.indicator.style.top = `${scrollerTop + ratio * trackHeight}px`;
+      }
+
+      destroy() {
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+        this.view.dom.removeEventListener("focusin", this.onFocus);
+        this.view.dom.removeEventListener("focusout", this.onBlur);
+        this.indicator.remove();
+      }
+    },
+  );
+}
+```
+
+## 主要な設計判断
+
+### 位置の計算
+
+インジケーターの垂直位置は、カーソルの行位置とコンテンツ全体の高さの比率として計算されます。
+
+```
+ratio = lineBlock.top / contentHeight
+indicatorTop = scrollerTop + ratio * trackHeight
+```
+
+`lineBlockAt(head)` はカーソル位置の視覚的な行ブロックを返し、コンテンツ上端からのピクセルオフセットを提供します。`contentHeight` で割ることで、スクロールバートラックにマッピングされる 0-1 の比率が得られます。
+
+<Note>
+
+この Extension は `scrollHeight`（`scrollPastEnd()` のパディングを含む場合がある）ではなく、`contentHeight`（実際のドキュメントコンテンツの高さ）を使用します。これにより、エディターが最後の行の後に追加のスクロール可能なスペースを持つ場合に、インジケーターが不自然に低い位置に押し下げられるのを防ぎます。
+
+</Note>
+
+### フォーカス対応の可視性
+
+インジケーターはエディターがフォーカスを持っている場合のみ表示されます。分割ペインエディターでは、複数の CodeMirror インスタンスが同時に表示される場合があります。フォーカス対応がないと、各ペインが独自のインジケーターを表示し、視覚的な混乱を引き起こします。
+
+```ts
+this.onFocus = () => {
+  this.focused = true;
+  this.updatePosition();
+};
+this.onBlur = () => {
+  this.focused = false;
+  this.indicator.style.display = "none";
+};
+```
+
+プラグインは `true` をデフォルトにするのではなく、`view.hasFocus` から `this.focused` を初期化します。これにより、フォーカスを受け取らずに作成されたエディター（新しく開いた分割ペインなど）のケースを処理します。
+
+### DOM アプローチ vs デコレーション
+
+この Extension は CodeMirror のデコレーションではなく、直接の DOM 操作（`view.dom` への `<div>` の追加）を使用します。これは、インジケーターがドキュメントコンテンツではなくスクロールバーに対して相対的に配置されるためです。デコレーションはドキュメント範囲にアノテーションを付けるために設計されており、スクロールバートラック上のオーバーレイには使用できません。
+
+### requestAnimationFrame
+
+位置の更新は `requestAnimationFrame` でバッチ処理され、複数のイベントが短時間に連続して発火した場合（高速タイピングなど）のレイアウトスラッシングを回避します。
+
+## クリーンアップ
+
+`destroy` メソッドはインジケーター要素を削除し、ペンディングのアニメーションフレームをキャンセルし、イベントリスナーを削除します。
+
+```ts
+destroy() {
+  if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+  this.view.dom.removeEventListener("focusin", this.onFocus);
+  this.view.dom.removeEventListener("focusout", this.onBlur);
+  this.indicator.remove();
+}
+```
+
+<Warning>
+
+`destroy` メソッドで必ずイベントリスナーを削除してください。クリーンアップしないと、Extension が再設定されたりエディターが再作成されたりした場合にリスナーが蓄積されます。
+
+</Warning>
+
+## 使い方
+
+```ts
+const extensions = [
+  // ... other extensions
+  scrollbarCursorIndicator(),
+];
+```
+
+インジケーターの色を変更するには、CSS カスタムプロパティを設定します。
+
+```css
+.my-editor {
+  --palette-cursor: #528bff;
+}
+```
+
+または、インジケータースタイルの `background` 値を固定色に変更します。
+
+```ts
+background: "rgba(82, 139, 255, 0.8)",
+```

@@ -1,0 +1,140 @@
+---
+title: Display Scale Integration
+description: Make CodeMirror responsive to a global display scale factor by computing scaled values in JavaScript and applying them via EditorView.theme().
+sidebar_position: 12
+---
+
+# Display Scale Integration
+
+This recipe shows how to make a CodeMirror editor responsive to a global display scale factor. The display scale is a multiplier (e.g., 1.0, 1.25, 1.5) that uniformly scales the editor's font size and padding, allowing users to zoom the editor independently of the browser zoom level.
+
+## The Pattern
+
+The approach computes scaled pixel values in JavaScript and applies them via `EditorView.theme()`. This is done at editor creation time, and the editor is recreated when the scale factor changes.
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+const settings = {
+  fontSize: 14,
+  fontFamily: "Menlo",
+  lineHeight: 1.6,
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+};
+
+const displayScale = 1.25;
+
+const scaledFontSize = settings.fontSize * displayScale;
+const scaledPaddingH = settings.paddingHorizontal * displayScale;
+const scaledPaddingV = settings.paddingVertical * displayScale;
+
+const editorTheme = EditorView.theme({
+  ".cm-scroller": {
+    fontFamily: `"${settings.fontFamily}", monospace`,
+    fontSize: `${scaledFontSize}px`,
+    lineHeight: String(settings.lineHeight),
+  },
+  ".cm-content": {
+    padding: `${scaledPaddingV}px 0`,
+  },
+  ".cm-line": {
+    paddingLeft: `${scaledPaddingH}px`,
+    paddingRight: `${scaledPaddingH}px`,
+  },
+});
+```
+
+## What Gets Scaled
+
+| Property | Base Value | At 1.25x |
+| --- | --- | --- |
+| Font size | 14px | 17.5px |
+| Horizontal padding | 16px | 20px |
+| Vertical padding | 12px | 15px |
+
+Line height is a unitless ratio (e.g., 1.6) and does not need scaling -- it automatically adjusts because it is relative to the font size.
+
+## Why Scale in JavaScript Instead of CSS?
+
+An alternative approach would be to use a CSS `transform: scale()` or a CSS custom property like `--display-scale` with `calc()`. However, scaling via JavaScript and `EditorView.theme()` has advantages:
+
+- **Pixel-perfect values** -- CodeMirror needs to know the exact font size for cursor positioning, line height calculations, and viewport measurements. CSS transforms can cause sub-pixel rendering issues.
+- **No layout disruption** -- CSS `transform: scale()` does not change the element's layout size, which breaks CodeMirror's scroll calculations.
+- **Gutter alignment** -- When line numbers are shown, the gutter padding must also scale. This is straightforward with computed values.
+
+```ts
+const themeRules: Record<string, Record<string, string>> = {
+  ".cm-scroller": {
+    fontFamily: `"${settings.fontFamily}", monospace`,
+    fontSize: `${scaledFontSize}px`,
+    lineHeight: String(settings.lineHeight),
+  },
+  ".cm-content": {
+    padding: `${scaledPaddingV}px 0`,
+  },
+  ".cm-line": {
+    paddingLeft: `${scaledPaddingH}px`,
+    paddingRight: `${scaledPaddingH}px`,
+  },
+};
+
+// Scale gutter padding when line numbers are visible
+if (showLineNumbers) {
+  themeRules[".cm-gutters"] = {
+    paddingTop: `${scaledPaddingV}px`,
+  };
+}
+
+const editorTheme = EditorView.theme(themeRules);
+```
+
+## Integration with a CSS Custom Property
+
+The rest of the application (outside CodeMirror) may use a CSS custom property for scaling:
+
+```css
+:root {
+  --display-scale: 1.25;
+}
+
+.sidebar {
+  font-size: calc(13px * var(--display-scale));
+}
+```
+
+CodeMirror does not use this CSS property directly. Instead, the JavaScript layer reads the same scale value from the settings object and computes pixel values. This keeps CodeMirror's internal measurements accurate while the rest of the UI uses the CSS approach.
+
+## Recreating vs Reconfiguring
+
+In this pattern, the editor is recreated when the display scale changes. This is the simplest approach because `EditorView.theme()` generates scoped CSS rules at creation time -- they cannot be updated in place.
+
+```ts
+// React hook example
+useEffect(() => {
+  const editorTheme = EditorView.theme({
+    ".cm-scroller": {
+      fontSize: `${settings.fontSize * displayScale}px`,
+    },
+  });
+
+  const view = new EditorView({
+    state: EditorState.create({ doc: content, extensions: [editorTheme] }),
+    parent: containerRef.current,
+  });
+
+  return () => view.destroy();
+}, [settings, displayScale]);
+```
+
+<Note>
+
+Recreating the editor is appropriate when the display scale changes because it is an infrequent operation (the user adjusts it in settings, not during active typing). The cost of destroying and recreating an `EditorView` is low compared to the complexity of dynamically updating theme rules.
+
+</Note>
+
+<Tip>
+
+When recreating the editor, preserve the document content and scroll position. Pass the current content as the initial `doc`, and restore `scrollDOM.scrollTop` after the new view is created.
+
+</Tip>

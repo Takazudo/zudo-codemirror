@@ -1,0 +1,211 @@
+---
+title: Bracket Colorization
+description: Color-code matching brackets by nesting depth using a ViewPlugin, stack-based pairing, and CSS custom properties for theme-aware colors.
+sidebar_position: 7
+---
+
+# Bracket Colorization
+
+This recipe builds a CodeMirror extension that colorizes matching bracket pairs based on nesting depth. Each depth level gets a distinct color, cycling through a fixed palette. Only properly paired brackets receive colors -- unmatched brackets remain unstyled.
+
+## Overview
+
+The extension has three parts:
+
+1. **A pure scanner function** that finds matched bracket pairs and their nesting depths
+2. **A ViewPlugin** that caches scan results and builds decorations for visible ranges
+3. **A base theme** that maps CSS classes to colors via custom properties
+
+## Scanning for Bracket Pairs
+
+The scanner walks through the document text with a stack-based approach. Open brackets push onto the stack; close brackets pop the matching opener. Only matched pairs produce marks.
+
+```ts
+const OPEN_BRACKETS = new Set(["(", "[", "{"]);
+const CLOSE_BRACKETS: Record<string, string> = {
+  ")": "(",
+  "]": "[",
+  "}": "{",
+};
+
+interface BracketMark {
+  pos: number;
+  depth: number;
+}
+
+function findBracketPairs(text: string): BracketMark[] {
+  const stack: Array<{ char: string; pos: number; depth: number }> = [];
+  const pairs: Array<[number, number, number]> = [];
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (OPEN_BRACKETS.has(ch)) {
+      stack.push({ char: ch, pos: i, depth: stack.length });
+    } else if (ch in CLOSE_BRACKETS) {
+      const expected = CLOSE_BRACKETS[ch];
+      if (stack.length > 0 && stack[stack.length - 1].char === expected) {
+        const opener = stack.pop()!;
+        pairs.push([opener.pos, i, opener.depth]);
+      }
+    }
+  }
+
+  const marks: BracketMark[] = [];
+  for (const [openPos, closePos, depth] of pairs) {
+    marks.push({ pos: openPos, depth });
+    marks.push({ pos: closePos, depth });
+  }
+  marks.sort((a, b) => a.pos - b.pos);
+  return marks;
+}
+```
+
+Key design choices:
+
+- **Pure function** -- `findBracketPairs` takes a plain string and returns data. No CodeMirror dependency, easy to unit test.
+- **Mismatched brackets are silently ignored** -- If a `)` does not match the top of the stack, it is skipped. Unmatched openers remaining on the stack after the scan are also ignored.
+- **Marks are sorted by position** -- This is required by `RangeSetBuilder`, which expects decorations in document order.
+
+## Building Decorations
+
+The decoration builder filters cached marks to only the visible ranges, avoiding unnecessary DOM work for offscreen content.
+
+```ts
+import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+const COLOR_COUNT = 6;
+
+function buildDecorationsFromMarks(
+  marks: BracketMark[],
+  view: EditorView,
+): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const visibleRanges = view.visibleRanges;
+  let rangeIdx = 0;
+
+  for (const mark of marks) {
+    // Advance past visible ranges that end before this mark
+    while (
+      rangeIdx < visibleRanges.length &&
+      visibleRanges[rangeIdx].to <= mark.pos
+    ) {
+      rangeIdx++;
+    }
+
+    if (
+      rangeIdx < visibleRanges.length &&
+      mark.pos >= visibleRanges[rangeIdx].from &&
+      mark.pos < visibleRanges[rangeIdx].to
+    ) {
+      const colorIndex = mark.depth % COLOR_COUNT;
+      builder.add(
+        mark.pos,
+        mark.pos + 1,
+        Decoration.mark({ class: `cm-bracket-${colorIndex}` }),
+      );
+    }
+  }
+
+  return builder.finish();
+}
+```
+
+The depth-to-color mapping uses modulo arithmetic (`depth % COLOR_COUNT`), so colors cycle when nesting exceeds the palette size.
+
+## The ViewPlugin
+
+The plugin rescans the full document only when content changes. On viewport-only changes (scrolling), it reuses the cached marks and just re-filters them to the new visible ranges.
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const bracketColorizePlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    marks: BracketMark[];
+
+    constructor(view: EditorView) {
+      this.marks = findBracketPairs(view.state.doc.toString());
+      this.decorations = buildDecorationsFromMarks(this.marks, view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged) {
+        this.marks = findBracketPairs(update.view.state.doc.toString());
+        this.decorations = buildDecorationsFromMarks(this.marks, update.view);
+      } else if (update.viewportChanged) {
+        this.decorations = buildDecorationsFromMarks(this.marks, update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+<Tip>
+
+The two-tier update strategy (`docChanged` vs `viewportChanged`) is important for performance. Scanning the full document text is O(n), but re-filtering cached marks against visible ranges is much cheaper and happens frequently during scrolling.
+
+</Tip>
+
+## Theme-Aware Colors with CSS Custom Properties
+
+The base theme assigns colors via CSS custom properties with sensible defaults. The host application can override these properties to match its color scheme.
+
+```ts
+const bracketColorizeTheme = EditorView.baseTheme({
+  ".cm-bracket-0": { color: "var(--bracket-color-0, #ffd700)" },
+  ".cm-bracket-1": { color: "var(--bracket-color-1, #da70d6)" },
+  ".cm-bracket-2": { color: "var(--bracket-color-2, #179fff)" },
+  ".cm-bracket-3": { color: "var(--bracket-color-3, #ffd700)" },
+  ".cm-bracket-4": { color: "var(--bracket-color-4, #da70d6)" },
+  ".cm-bracket-5": { color: "var(--bracket-color-5, #179fff)" },
+});
+```
+
+Using `EditorView.baseTheme()` (instead of `EditorView.theme()`) gives these styles lower precedence, so the application's theme can override them.
+
+The defaults cycle through gold, orchid, and blue -- three visually distinct colors that work on both light and dark backgrounds.
+
+## Exporting the Extension
+
+Bundle the plugin and theme together as a single extension:
+
+```ts
+import type { Extension } from "@codemirror/state";
+
+function bracketColorize(): Extension {
+  return [bracketColorizePlugin, bracketColorizeTheme];
+}
+```
+
+## Usage
+
+```ts
+const extensions = [
+  // ... other extensions
+  bracketColorize(),
+];
+```
+
+To customize colors, set CSS custom properties on a parent element:
+
+```css
+.my-editor {
+  --bracket-color-0: #e6b422;
+  --bracket-color-1: #c678dd;
+  --bracket-color-2: #61afef;
+  --bracket-color-3: #e6b422;
+  --bracket-color-4: #c678dd;
+  --bracket-color-5: #61afef;
+}
+```
+
+<Note>
+
+This approach scans the raw document text rather than using the syntax tree. It works well for markdown and plain text where brackets are not hidden inside string literals or comments. For a language-aware bracket colorizer, you would use `syntaxTree(state)` to walk only bracket tokens identified by the parser.
+
+</Note>

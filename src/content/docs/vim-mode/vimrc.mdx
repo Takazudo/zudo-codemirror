@@ -174,3 +174,78 @@ if (vimrc) {
   applyVimrc(view, vimrc);
 }
 ```
+
+## File-Based + Settings-Based Vimrc Layering
+
+In a desktop application, you may want to support two vimrc sources:
+
+1. **File-based vimrc** -- A `.vimrc` file on disk, loaded via the backend (e.g., Tauri IPC)
+2. **Settings-based vimrc** -- A vimrc string stored in the application settings UI
+
+The layering strategy applies the file-based vimrc first, then the settings-based vimrc second. This way, settings-based overrides take precedence, and the user can customize behavior without editing the disk file.
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+async function applyLayeredVimrc(
+  view: EditorView,
+  settingsVimrc: string,
+  readVimrcFromDisk: () => Promise<string | null>,
+) {
+  const cm = getCM(view);
+  if (!cm) return;
+
+  const applyVimrc = (source: string, label: string) => {
+    for (const cmd of parseVimrc(source)) {
+      try {
+        Vim.handleEx(cm, cmd);
+      } catch (e) {
+        console.warn(`${label} vimrc command failed: ${cmd}`, e);
+      }
+    }
+  };
+
+  // Layer 1: file-based vimrc (loaded from disk)
+  const fileVimrc = await readVimrcFromDisk();
+  if (fileVimrc) {
+    applyVimrc(fileVimrc, "file-based");
+  }
+
+  // Layer 2: settings-based vimrc (overrides file-based)
+  if (settingsVimrc) {
+    applyVimrc(settingsVimrc, "settings");
+  }
+}
+```
+
+<Tip>
+
+This layering pattern mirrors how shell configuration works (`/etc/profile` then `~/.profile`). The file-based vimrc provides machine-level defaults, while the settings-based vimrc allows per-application customization through the UI.
+
+</Tip>
+
+### Handling Async Loading
+
+Since file-based vimrc is loaded asynchronously (via file system APIs), the vimrc application happens after the `EditorView` is created. Use a cancellation guard to prevent applying vimrc to a destroyed editor:
+
+```ts
+let cancelled = false;
+
+readVimrcFromDisk().then((vimrcContent) => {
+  if (cancelled) return;
+  const cm = getCM(view);
+  if (!cm) return;
+
+  if (vimrcContent) {
+    applyVimrc(vimrcContent, "file-based");
+  }
+  if (settingsVimrc) {
+    applyVimrc(settingsVimrc, "settings");
+  }
+});
+
+// In cleanup:
+cancelled = true;
+```
+
+This is important in React applications where the editor may be destroyed and recreated before the async vimrc read completes.

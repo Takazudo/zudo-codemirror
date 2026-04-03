@@ -174,3 +174,78 @@ if (vimrc) {
   applyVimrc(view, vimrc);
 }
 ```
+
+## ファイルベース + 設定ベースの vimrc レイヤリング
+
+デスクトップアプリケーションでは、2つの vimrc ソースをサポートしたい場合があります。
+
+1. **ファイルベースの vimrc** -- ディスク上の `.vimrc` ファイル。バックエンド（例: Tauri IPC）経由でロード
+2. **設定ベースの vimrc** -- アプリケーション設定 UI に保存された vimrc 文字列
+
+レイヤリング戦略は、ファイルベースの vimrc を最初に適用し、次に設定ベースの vimrc を適用します。これにより、設定ベースのオーバーライドが優先され、ユーザーはディスクファイルを編集せずに動作をカスタマイズできます。
+
+```ts
+import { getCM, Vim } from "@replit/codemirror-vim";
+
+async function applyLayeredVimrc(
+  view: EditorView,
+  settingsVimrc: string,
+  readVimrcFromDisk: () => Promise<string | null>,
+) {
+  const cm = getCM(view);
+  if (!cm) return;
+
+  const applyVimrc = (source: string, label: string) => {
+    for (const cmd of parseVimrc(source)) {
+      try {
+        Vim.handleEx(cm, cmd);
+      } catch (e) {
+        console.warn(`${label} vimrc command failed: ${cmd}`, e);
+      }
+    }
+  };
+
+  // レイヤー 1: ファイルベースの vimrc（ディスクからロード）
+  const fileVimrc = await readVimrcFromDisk();
+  if (fileVimrc) {
+    applyVimrc(fileVimrc, "file-based");
+  }
+
+  // レイヤー 2: 設定ベースの vimrc（ファイルベースをオーバーライド）
+  if (settingsVimrc) {
+    applyVimrc(settingsVimrc, "settings");
+  }
+}
+```
+
+<Tip>
+
+このレイヤリングパターンはシェル設定の動作（`/etc/profile` の後に `~/.profile`）を模倣しています。ファイルベースの vimrc はマシンレベルのデフォルトを提供し、設定ベースの vimrc は UI を通じたアプリケーションごとのカスタマイズを可能にします。
+
+</Tip>
+
+### 非同期ロードの処理
+
+ファイルベースの vimrc はファイルシステム API 経由で非同期にロードされるため、vimrc の適用は `EditorView` の作成後に行われます。破棄されたエディターへの vimrc 適用を防ぐために、キャンセルガードを使用します。
+
+```ts
+let cancelled = false;
+
+readVimrcFromDisk().then((vimrcContent) => {
+  if (cancelled) return;
+  const cm = getCM(view);
+  if (!cm) return;
+
+  if (vimrcContent) {
+    applyVimrc(vimrcContent, "file-based");
+  }
+  if (settingsVimrc) {
+    applyVimrc(settingsVimrc, "settings");
+  }
+});
+
+// クリーンアップ時:
+cancelled = true;
+```
+
+これは、非同期の vimrc 読み取りが完了する前にエディターが破棄され再作成される可能性がある React アプリケーションで重要です。

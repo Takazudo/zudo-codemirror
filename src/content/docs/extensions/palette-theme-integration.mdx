@@ -1,0 +1,241 @@
+---
+title: Palette-Based Theme System
+description: Create a CodeMirror theme driven entirely by CSS custom properties using an ANSI-style palette, color-mix() for opacity, and HighlightStyle tag mappings.
+sidebar_position: 7
+---
+
+# Palette-Based Theme System
+
+This page documents a theme architecture where CodeMirror gets all its colors from CSS custom properties following an ANSI terminal palette convention. The editor's appearance updates automatically when the CSS variables change, with no need to rebuild or reconfigure the theme.
+
+## The Palette
+
+The color scheme is defined as CSS custom properties on a parent element:
+
+```css
+:root {
+  --palette-fg: #c0c0c0;
+  --palette-bg: #1e1e2e;
+  --palette-cursor: #f5e0dc;
+  --palette-selection: rgba(88, 91, 112, 0.5);
+
+  /* ANSI-style palette: 0-15 */
+  --palette-0: #11111b; /* black   -- surfaces, gutters */
+  --palette-1: #f38ba8; /* red     -- invalid, errors */
+  --palette-2: #a6e3a1; /* green   -- strings */
+  --palette-3: #f9e2af; /* yellow  -- numbers, types */
+  --palette-4: #89b4fa; /* blue    -- keywords, headings */
+  --palette-5: #cba6f7; /* magenta -- functions, tags */
+  --palette-6: #94e2d5; /* cyan    -- operators, links */
+  --palette-7: #bac2de; /* white   -- punctuation */
+  --palette-8: #585b70; /* bright black -- comments */
+  --palette-15: #6c7086; /* bright white -- line numbers */
+}
+```
+
+This palette maps to the traditional 16-color ANSI terminal convention, which provides a natural mapping for syntax highlighting categories.
+
+## Editor UI Theme
+
+The editor theme uses `EditorView.theme()` with CSS custom properties for every color:
+
+```ts
+import { EditorView } from "@codemirror/view";
+
+function createEditorColorTheme(isDark: boolean) {
+  const baseTheme = EditorView.theme(
+    {
+      "&": {
+        color: "var(--palette-fg)",
+        backgroundColor: "var(--palette-bg)",
+      },
+      ".cm-content": {
+        caretColor: "var(--palette-cursor)",
+      },
+      ".cm-cursor, .cm-dropCursor": {
+        borderLeftColor: "var(--palette-cursor)",
+      },
+      "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+        {
+          backgroundColor: "var(--palette-selection)",
+        },
+      ".cm-panels": {
+        backgroundColor: "var(--palette-0)",
+        color: "var(--palette-fg)",
+      },
+      ".cm-gutters": {
+        backgroundColor: "var(--palette-bg)",
+        color: "var(--palette-15)",
+        border: "none",
+      },
+    },
+    { dark: isDark },
+  );
+
+  // ... (highlight style below)
+  return [baseTheme];
+}
+```
+
+The `isDark` parameter tells CodeMirror whether this is a dark theme, which affects default styles for UI elements not explicitly styled.
+
+## Opacity with color-mix()
+
+For semi-transparent overlays (active line, search matches, selection matches), the theme uses `color-mix()` in the `oklch` color space:
+
+```ts
+".cm-activeLine": {
+  backgroundColor: "color-mix(in oklch, var(--palette-fg) 4%, transparent)",
+},
+".cm-searchMatch": {
+  backgroundColor: "color-mix(in oklch, var(--palette-3) 30%, transparent)",
+  outline: "1px solid color-mix(in oklch, var(--palette-3) 50%, transparent)",
+},
+".cm-searchMatch.cm-searchMatch-selected": {
+  backgroundColor: "color-mix(in oklch, var(--palette-3) 50%, transparent)",
+},
+".cm-selectionMatch": {
+  backgroundColor: "color-mix(in oklch, var(--palette-selection) 50%, transparent)",
+},
+"&.cm-focused .cm-matchingBracket, &.cm-focused .cm-nonmatchingBracket": {
+  backgroundColor: "color-mix(in oklch, var(--palette-4) 25%, transparent)",
+},
+```
+
+<Tip>
+
+`color-mix(in oklch, var(--some-color) 30%, transparent)` is a modern CSS alternative to `rgba()` with hardcoded values. It works with any color format and produces perceptually uniform blending in the oklch color space. It allows you to derive semi-transparent variants from opaque custom properties without defining additional variables.
+
+</Tip>
+
+## Syntax Highlighting with HighlightStyle
+
+The highlight style maps Lezer tags to palette colors:
+
+```ts
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+
+const highlightStyle = HighlightStyle.define([
+  // Comments
+  { tag: tags.comment, color: "var(--palette-8)" },
+
+  // Keywords & control flow
+  { tag: tags.keyword, color: "var(--palette-4)" },
+
+  // Functions & tags
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.definition(tags.variableName)),
+      tags.tagName,
+    ],
+    color: "var(--palette-5)",
+  },
+
+  // Strings
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--palette-2)" },
+  { tag: tags.regexp, color: "var(--palette-6)" },
+  { tag: tags.escape, color: "var(--palette-6)" },
+
+  // Numbers, booleans, types
+  {
+    tag: [tags.number, tags.bool, tags.null, tags.typeName, tags.className, tags.namespace],
+    color: "var(--palette-3)",
+  },
+
+  // Variables & properties
+  { tag: [tags.variableName, tags.definition(tags.variableName)], color: "var(--palette-fg)" },
+  { tag: [tags.propertyName, tags.definition(tags.propertyName)], color: "var(--palette-4)" },
+
+  // Operators & punctuation
+  { tag: tags.operator, color: "var(--palette-6)" },
+  { tag: tags.punctuation, color: "var(--palette-7)" },
+  { tag: [tags.derefOperator, tags.separator], color: "var(--palette-fg)" },
+
+  // HTML/JSX attributes
+  { tag: tags.attributeName, color: "var(--palette-3)" },
+  { tag: tags.attributeValue, color: "var(--palette-2)" },
+
+  // Markdown markup
+  { tag: tags.heading, color: "var(--palette-4)", fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic", color: "var(--palette-5)" },
+  { tag: tags.strong, fontWeight: "bold", color: "var(--palette-3)" },
+  { tag: [tags.link, tags.url], color: "var(--palette-6)", textDecoration: "underline" },
+  { tag: tags.quote, color: "var(--palette-8)", fontStyle: "italic" },
+  { tag: tags.monospace, color: "var(--palette-2)" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+
+  // Meta & invalid
+  { tag: tags.meta, color: "var(--palette-8)" },
+  { tag: tags.invalid, color: "var(--palette-1)" },
+]);
+```
+
+### Palette-to-Syntax Mapping
+
+| Palette Slot | ANSI Color | Syntax Category |
+| --- | --- | --- |
+| `--palette-1` | Red | Invalid tokens |
+| `--palette-2` | Green | Strings, attribute values, monospace |
+| `--palette-3` | Yellow | Numbers, types, booleans, attributes, strong text |
+| `--palette-4` | Blue | Keywords, properties, headings |
+| `--palette-5` | Magenta | Functions, tags, emphasis |
+| `--palette-6` | Cyan | Operators, regex, escape sequences, links |
+| `--palette-7` | White | Punctuation |
+| `--palette-8` | Bright black | Comments, quotes, meta |
+| `--palette-15` | Bright white | Line numbers |
+| `--palette-fg` | Foreground | Variables, separators, deref operators |
+
+## Returning the Complete Theme
+
+The function returns both the editor theme and the syntax highlighting as an array of extensions:
+
+```ts
+function createEditorColorTheme(isDark: boolean): Extension[] {
+  const baseTheme = EditorView.theme({ /* ... */ }, { dark: isDark });
+  const highlightStyle = HighlightStyle.define([ /* ... */ ]);
+  return [baseTheme, syntaxHighlighting(highlightStyle)];
+}
+```
+
+## Usage
+
+```ts
+const extensions = [
+  ...createEditorColorTheme(isDark),
+  // ... other extensions
+];
+```
+
+Switching themes at runtime only requires changing the CSS custom property values on the parent element. Because `HighlightStyle.define()` uses `var()` references (not resolved values), the colors update via CSS without reconfiguring CodeMirror.
+
+<Note>
+
+The `isDark` parameter passed to `EditorView.theme()` is a static boolean set at editor creation time. If the user switches between light and dark themes, the editor should be recreated with the correct `isDark` value. This only affects CodeMirror's default fallback styles for elements you have not explicitly themed.
+
+</Note>
+
+## Tooltip and Panel Styling
+
+The theme also covers tooltips, panels, and fold placeholders to maintain visual consistency:
+
+```ts
+".cm-tooltip": {
+  border: "1px solid var(--palette-0)",
+  backgroundColor: "var(--palette-bg)",
+},
+".cm-tooltip-autocomplete": {
+  "& > ul > li[aria-selected]": {
+    backgroundColor: "var(--palette-selection)",
+    color: "var(--palette-fg)",
+  },
+},
+".cm-foldPlaceholder": {
+  backgroundColor: "transparent",
+  border: "none",
+  color: "var(--palette-8)",
+},
+```
+
+Every visible surface in the editor uses a palette color, ensuring the editor looks correct regardless of which color scheme is active.

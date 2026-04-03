@@ -1,0 +1,140 @@
+---
+title: Typewriter Scrolling
+description: Keep the cursor line centered in the viewport while typing, using a ViewPlugin with requestAnimationFrame and a tolerance zone.
+sidebar_position: 9
+---
+
+# Typewriter Scrolling
+
+Typewriter scrolling keeps the cursor line vertically centered in the editor viewport as the user types, similar to the behavior in writing-focused editors like iA Writer and Obsidian. This recipe shows how to build it as a CodeMirror extension.
+
+## How It Works
+
+The extension uses a `ViewPlugin` that listens for selection and document changes. When the cursor moves outside a tolerance zone around the viewport center, the editor scrolls to re-center it.
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+function typewriterScrolling() {
+  return ViewPlugin.fromClass(
+    class {
+      private pendingFrame = 0;
+
+      update(update: ViewUpdate) {
+        if (!update.selectionSet && !update.docChanged) return;
+
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+
+        const view = update.view;
+        const { head } = view.state.selection.main;
+
+        this.pendingFrame = requestAnimationFrame(() => {
+          this.pendingFrame = 0;
+          const coords = view.coordsAtPos(head);
+          if (!coords) return;
+
+          const editorRect = view.dom.getBoundingClientRect();
+          const viewportHeight = editorRect.height;
+          const centerY = editorRect.top + viewportHeight / 2;
+          const cursorY = coords.top;
+
+          // Only scroll if cursor is outside the center third
+          const tolerance = viewportHeight / 6;
+          if (Math.abs(cursorY - centerY) < tolerance) return;
+
+          view.scrollDOM.scrollTo({
+            top: view.scrollDOM.scrollTop + (cursorY - centerY),
+            behavior: "instant",
+          });
+        });
+      }
+
+      destroy() {
+        if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+      }
+    },
+  );
+}
+```
+
+## Key Design Decisions
+
+### requestAnimationFrame
+
+The scroll adjustment runs inside `requestAnimationFrame` rather than synchronously in the `update` method. This prevents layout thrashing -- reading layout properties (like `coordsAtPos` and `getBoundingClientRect`) and then immediately writing (via `scrollTo`) in the same synchronous flow can force the browser to recalculate layout multiple times.
+
+If multiple updates arrive in the same frame, the previous pending frame is cancelled. Only the last update's scroll adjustment runs.
+
+### Tolerance Zone
+
+Without a tolerance zone, the editor would scroll on every single cursor movement, creating a jittery experience. The tolerance is set to one-sixth of the viewport height, meaning the cursor can move within the center third of the viewport without triggering a scroll.
+
+```
+ +--------------------------+
+ |                          |  <- top third (scroll triggers here)
+ |                          |
+ +--------------------------+
+ |                          |  <- center third (no scroll)
+ |       cursor here OK     |
+ +--------------------------+
+ |                          |  <- bottom third (scroll triggers here)
+ |                          |
+ +--------------------------+
+```
+
+### Triggering Conditions
+
+The plugin responds to two conditions:
+
+- **`update.selectionSet`** -- The cursor moved (arrow keys, mouse click, search jump)
+- **`update.docChanged`** -- The document was modified (typing, paste, undo)
+
+Both are needed because typing creates both a document change and a selection change, while clicking only changes the selection.
+
+### Instant Scrolling
+
+The scroll behavior is set to `"instant"` rather than `"smooth"`. Smooth scrolling creates a visible animation that feels sluggish when typing quickly. Instant scrolling keeps the cursor centered without visible delay.
+
+<Note>
+
+If you prefer a gentler feel, you can change `"instant"` to `"smooth"`. However, be aware that rapid keystrokes will queue multiple smooth scroll animations, which can cause the viewport to lag behind the cursor.
+
+</Note>
+
+## Cleanup
+
+The `destroy` method cancels any pending animation frame when the plugin is removed. This prevents a stale callback from running after the editor is destroyed.
+
+```ts
+destroy() {
+  if (this.pendingFrame) cancelAnimationFrame(this.pendingFrame);
+}
+```
+
+## Usage
+
+```ts
+const extensions = [
+  // ... other extensions
+  typewriterScrolling(),
+];
+```
+
+<Tip>
+
+Typewriter scrolling works best with `scrollPastEnd()` from `@codemirror/view`. Without it, the editor cannot scroll the last line to the center of the viewport because there is no content below it to scroll into. `scrollPastEnd()` adds virtual space after the document to enable this.
+
+</Tip>
+
+## Making It Toggleable
+
+In a settings-driven editor, typewriter scrolling should be toggled on and off without recreating the editor. One approach is to conditionally include the extension:
+
+```ts
+const extensions = [
+  // ... other extensions
+  ...(settings.typewriterScrolling ? [typewriterScrolling()] : []),
+];
+```
+
+Alternatively, use a [Compartment](/docs/extensions/compartments/) for runtime reconfiguration.

@@ -1,0 +1,204 @@
+---
+title: インデントガイド
+description: ラインデコレーション、CSS カスタムプロパティ、繰り返しリニアグラディエントを使用して、CodeMirror に垂直インデントガイド線を描画する方法。
+sidebar_position: 8
+---
+
+# インデントガイド
+
+このレシピでは、各インデントレベルに垂直インデントガイド線を描画する CodeMirror Extension を構築します。ガイドは CSS のみで描画され、Canvas や SVG は使用しません。擬似要素上の繰り返しリニアグラディエントを使用します。
+
+## 概要
+
+アプローチは以下の通りです。
+
+1. 表示されている各行で、インデントレベル（先頭のスペースまたはタブの数）を数える
+2. CSS カスタムプロパティ `--indent-level` にレベル数を設定したラインデコレーションを追加
+3. `::before` 擬似要素が繰り返しグラディエントで垂直線を描画
+
+## インデントの計測
+
+インデントカウンターはスペースとタブの両方を固定単位幅に基づく統一レベルに変換します。Markdown ではネストされたリストに2スペースインデントが慣例です。
+
+```ts
+const INDENT_UNIT = 2;
+const MAX_INDENT_LEVEL = 10;
+
+function countIndentLevel(line: string): number {
+  let spaces = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === " ") {
+      spaces++;
+    } else if (line[i] === "\t") {
+      spaces += INDENT_UNIT;
+    } else {
+      break;
+    }
+  }
+  // 空白のみの行はスキップ -- 空行にはガイドを表示しない
+  if (spaces >= line.length) return 0;
+  return Math.min(Math.floor(spaces / INDENT_UNIT), MAX_INDENT_LEVEL);
+}
+```
+
+<Note>
+
+空白のみの行は 0 を返し、空行にガイドが描画されるのを防ぎます。これにより、ドキュメントの空の領域に煩わしい垂直線が表示されるのを回避できます。`MAX_INDENT_LEVEL` はデコレーション数を制限し、異常な入力から保護します。
+
+</Note>
+
+## ラインデコレーションの構築
+
+インデントのある各表示行に対して、ラインデコレーションが `--indent-level` カスタムプロパティを設定します。CSS テーマはこの値を使ってグラディエント領域の幅を決定します。
+
+```ts
+import {
+  ViewPlugin,
+  Decoration,
+  DecorationSet,
+  EditorView,
+  ViewUpdate,
+} from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+function buildDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from;
+    while (pos <= to) {
+      const line = view.state.doc.lineAt(pos);
+      const level = countIndentLevel(line.text);
+
+      if (level > 0) {
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({
+            attributes: {
+              class: "cm-indent-guides",
+              style: `--indent-level: ${level}`,
+            },
+          }),
+        );
+      }
+
+      pos = line.to + 1;
+    }
+  }
+
+  return builder.finish();
+}
+```
+
+## ViewPlugin
+
+プラグインはドキュメント変更とビューポートスクロールでデコレーションを再構築します。
+
+```ts
+const indentGuidesPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+## CSS テーマ: 繰り返しグラディエントテクニック
+
+テーマは `::before` 擬似要素と繰り返しリニアグラディエントを使用してガイド線を描画します。各「カラム」は `2ch` 幅（`INDENT_UNIT` に対応）で、左端に 1px の線があります。
+
+```ts
+const indentGuidesTheme = EditorView.baseTheme({
+  ".cm-indent-guides": {
+    position: "relative",
+  },
+  ".cm-indent-guides::before": {
+    content: '""',
+    position: "absolute",
+    top: "0",
+    bottom: "0",
+    left: "calc(-1 * var(--cm-hang, 0px))",
+    width: "calc(2ch * var(--indent-level, 0))",
+    paddingLeft: "inherit",
+    backgroundImage: [
+      "repeating-linear-gradient(to right,",
+      "color-mix(in oklch, var(--palette-fg) 12%, transparent) 0px,",
+      "color-mix(in oklch, var(--palette-fg) 12%, transparent) 1px,",
+      "transparent 1px,",
+      "transparent 2ch)",
+    ].join(" "),
+    backgroundOrigin: "content-box",
+    backgroundRepeat: "no-repeat",
+    pointerEvents: "none",
+  },
+});
+```
+
+仕組み:
+
+- **`width: calc(2ch * var(--indent-level, 0))`** -- 擬似要素はすべてのインデントカラムをカバーするのに十分な幅
+- **`repeating-linear-gradient`** -- `2ch` ごとに 1px の垂直線を描画し、インデントレベルごとに1本のガイドを作成
+- **`color-mix(in oklch, var(--palette-fg) 12%, transparent)`** -- 前景色を 12% の不透明度でミックスし、ガイドを控えめに表示。ライトテーマとダークテーマに自動的に適応
+- **`backgroundOrigin: content-box`** と `paddingLeft: inherit` -- グラディエントがエディターの水平パディングの後から開始
+- **`left: calc(-1 * var(--cm-hang, 0px))`** -- リストハンギングインデント Extension によるマージンシフトを補正するために擬似要素をオフセット（[Markdown リスト処理](/docs-ja/recipes/markdown-list-handling/)を参照）
+- **`pointerEvents: none`** -- 擬似要素がクリックを妨げないように設定
+
+<Tip>
+
+`ch` 単位は現在のフォントの `0` 文字の幅に基づきます。等幅フォントではうまく動作しますが、プロポーショナルフォントではガイドの配置は近似値になります。
+
+</Tip>
+
+## Extension のエクスポート
+
+```ts
+import type { Extension } from "@codemirror/state";
+
+function indentGuides(): Extension {
+  return [indentGuidesPlugin, indentGuidesTheme];
+}
+```
+
+## 使い方
+
+```ts
+const extensions = [
+  // ... other extensions
+  indentGuides(),
+];
+```
+
+ガイドの色を変更するには、`color-mix` で使用される CSS カスタムプロパティをオーバーライドします。または、アプリケーションのテーマでグラディエントを置き換えます。
+
+```ts
+const customGuideTheme = EditorView.theme({
+  ".cm-indent-guides::before": {
+    backgroundImage: [
+      "repeating-linear-gradient(to right,",
+      "rgba(128, 128, 128, 0.15) 0px,",
+      "rgba(128, 128, 128, 0.15) 1px,",
+      "transparent 1px,",
+      "transparent 2ch)",
+    ].join(" "),
+  },
+});
+```
+
+<Warning>
+
+ラインデコレーションは `.cm-line` 要素に適用されます。別の Extension（ハンギングインデントなど）も `margin-left` や `text-indent` のラインデコレーションを追加する場合、インデントガイドの擬似要素はそのオフセットを考慮する必要があります。上記の `left: calc(-1 * var(--cm-hang, 0px))` パターンは、ハンギングインデント Extension が設定する CSS カスタムプロパティを読み取ることでこれに対応しています。
+
+</Warning>

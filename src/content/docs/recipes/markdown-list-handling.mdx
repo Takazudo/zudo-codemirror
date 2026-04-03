@@ -1,0 +1,277 @@
+---
+title: Markdown List Handling
+description: Two complementary extensions for markdown lists -- auto-continuation of list markers on Enter and hanging indent for wrapped lines using syntax tree analysis.
+sidebar_position: 11
+---
+
+# Markdown List Handling
+
+This recipe covers two complementary CodeMirror extensions for working with markdown lists:
+
+1. **List continuation** -- Auto-continues list markers when pressing Enter, auto-increments numbers, and removes empty list items
+2. **Hanging indent** -- Aligns wrapped lines with the content after the list marker
+
+Together, these extensions create an Obsidian-like editing experience for markdown lists.
+
+## Why Custom Instead of Built-In?
+
+CodeMirror's `@codemirror/lang-markdown` provides `insertNewlineContinueMarkup`, which handles basic list continuation. However, a custom implementation offers more control over:
+
+- **Checkbox continuation** -- Inserting unchecked `[ ]` checkboxes when continuing a task list
+- **Cursor-at-end requirement** -- Only triggering when the cursor is at the end of the line, not mid-line
+- **Empty item behavior** -- Clearing the entire line (not just removing the prefix) when the list item has no content
+
+The hanging indent extension is entirely custom -- CodeMirror does not provide a built-in equivalent.
+
+## Part 1: List Continuation
+
+### Regex-Based List Detection
+
+The extension uses a regex to detect list markers at the start of a line:
+
+```ts
+const listMarkerRe = /^(\s*)([-*+]|\d+\.)\s(\[[ xX]\]\s)?/;
+```
+
+This matches:
+
+- Optional leading whitespace (`\s*`)
+- A list marker: `-`, `*`, `+`, or a number followed by `.`
+- A required space after the marker
+- An optional checkbox (`[ ]`, `[x]`, or `[X]`) with trailing space
+
+### Computing the Next Marker
+
+```ts
+function getNextListMarker(
+  lineText: string,
+): { prefix: string; isEmpty: boolean } | null {
+  const match = lineText.match(listMarkerRe);
+  if (!match) return null;
+
+  const [fullMatch, indent, marker, checkbox] = match;
+  const textAfterMarker = lineText.slice(fullMatch.length);
+  const isEmpty = textAfterMarker.trim() === "";
+
+  let nextMarker = marker;
+  if (/^\d+\./.test(marker)) {
+    const num = parseInt(marker, 10);
+    nextMarker = `${num + 1}.`;
+  }
+
+  const nextCheckbox = checkbox ? "[ ] " : "";
+  const prefix = `${indent}${nextMarker} ${nextCheckbox}`;
+
+  return { prefix, isEmpty };
+}
+```
+
+Numbered lists are auto-incremented: if the current line starts with `3.`, the next line gets `4.`. Checkbox lists continue with an unchecked box `[ ]`.
+
+### The Keymap Handler
+
+```ts
+import { EditorView, keymap } from "@codemirror/view";
+
+function handleEnterInList(view: EditorView): boolean {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+
+  // Only handle single cursor (no selection range)
+  if (from !== to) return false;
+
+  const line = state.doc.lineAt(from);
+
+  // Only trigger when cursor is at the end of the line
+  if (from !== line.to) return false;
+
+  const result = getNextListMarker(line.text);
+  if (!result) return false;
+
+  // Empty list item -- remove the marker line to exit the list
+  if (result.isEmpty) {
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: "" },
+    });
+    return true;
+  }
+
+  // Insert new line with continued marker
+  const newLine = `\n${result.prefix}`;
+  view.dispatch({
+    changes: { from, to: from, insert: newLine },
+    selection: { anchor: from + newLine.length },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function markdownListIndent() {
+  return keymap.of([
+    { key: "Enter", run: handleEnterInList },
+  ]);
+}
+```
+
+<Tip>
+
+The handler returns `false` when it does not apply (non-list line, cursor not at end, active selection). This allows other keybindings for the Enter key to handle the event. Returning `true` stops propagation.
+
+</Tip>
+
+### Behavior Summary
+
+| Current Line | Action |
+| --- | --- |
+| `- Item text` | Insert `\n- ` and place cursor after the marker |
+| `3. Item text` | Insert `\n4. ` (auto-increment) |
+| `- [ ] Task` | Insert `\n- [ ] ` (unchecked checkbox) |
+| `- ` (empty item) | Clear the line entirely, exiting the list |
+
+## Part 2: Hanging Indent
+
+When a long list item wraps to the next visual line, the default behavior left-aligns the continuation text with the list marker. Hanging indent aligns it with the content *after* the marker instead.
+
+```
+Without hanging indent:
+- This is a long list item that wraps to
+the next visual line
+
+With hanging indent:
+- This is a long list item that wraps to
+  the next visual line
+```
+
+### Measuring Marker Width with the Syntax Tree
+
+The extension uses the Lezer syntax tree to identify `ListItem` nodes, then measures the marker prefix width:
+
+```ts
+import { syntaxTree } from "@codemirror/language";
+import { countColumn } from "@codemirror/state";
+
+const listPrefixRe =
+  /^([ \t]*)([-*+]|\d+\.)( {1,4}\[[ xX]\])? {1,4}/;
+
+function getMarkerWidth(text: string, tabSize: number): number {
+  const m = listPrefixRe.exec(text);
+  if (!m) return 0;
+  const markerOnly = m[0].slice(m[1].length);
+  return countColumn(markerOnly, tabSize);
+}
+```
+
+The marker width is measured using `countColumn` from CodeMirror's state module, which accounts for tab characters correctly. The leading whitespace is excluded because CodeMirror handles that via normal indentation.
+
+### Building Decorations
+
+```ts
+import {
+  ViewPlugin,
+  Decoration,
+  DecorationSet,
+  EditorView,
+  ViewUpdate,
+} from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+function buildDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const tree = syntaxTree(view.state);
+  const seen = new Set<number>();
+
+  for (const { from, to } of view.visibleRanges) {
+    tree.iterate({
+      from,
+      to,
+      enter(node) {
+        if (node.name !== "ListItem") return;
+
+        const line = view.state.doc.lineAt(node.from);
+        if (seen.has(line.from)) return;
+        seen.add(line.from);
+
+        const cols = getMarkerWidth(line.text, view.state.tabSize);
+        if (cols <= 0) return;
+
+        builder.add(
+          line.from,
+          line.from,
+          Decoration.line({
+            attributes: {
+              class: "cm-list-hanging-indent",
+              style: `--cm-hang: ${cols}ch`,
+            },
+          }),
+        );
+      },
+    });
+  }
+
+  return builder.finish();
+}
+```
+
+The `seen` set prevents duplicate decorations when the syntax tree yields multiple `ListItem` nodes starting on the same line.
+
+### The CSS Technique
+
+The hanging indent is achieved with a CSS custom property `--cm-hang` that drives `margin-left` and `text-indent`:
+
+```ts
+const listHangingIndentTheme = EditorView.baseTheme({
+  ".cm-list-hanging-indent": {
+    marginLeft: "var(--cm-hang)",
+    textIndent: "calc(-1 * var(--cm-hang))",
+  },
+});
+```
+
+How this works:
+
+- `margin-left: var(--cm-hang)` shifts the entire line (including wrapped text) to the right
+- `text-indent: calc(-1 * var(--cm-hang))` pulls the first line back to its original position
+
+The result: the first line starts at the normal position, and wrapped lines are indented to align with the content after the marker.
+
+<Warning>
+
+The `ch` unit assumes a monospace font. With proportional fonts, the alignment will be approximate because character widths vary. For precise alignment with proportional fonts, you would need to measure the actual pixel width of the prefix text.
+
+</Warning>
+
+### Syntax Tree Updates
+
+The plugin rebuilds decorations not only on `docChanged` and `viewportChanged`, but also when the syntax tree itself changes:
+
+```ts
+update(update: ViewUpdate) {
+  if (
+    update.docChanged ||
+    update.viewportChanged ||
+    syntaxTree(update.startState) !== syntaxTree(update.state)
+  ) {
+    this.decorations = buildDecorations(update.view);
+  }
+}
+```
+
+This handles the case where the Lezer parser runs incrementally and the tree updates asynchronously after a document change.
+
+## Using Both Extensions Together
+
+The `margin-left` / `text-indent` approach used by the hanging indent extension also affects the indent guides extension (see [Indent Guides](/docs/recipes/indent-guides/)). The indent guides use `left: calc(-1 * var(--cm-hang, 0px))` on their pseudo-element to compensate for the margin shift, ensuring guides align correctly on both list and non-list lines.
+
+```ts
+const extensions = [
+  // ... other extensions
+  markdownListIndent(),
+  listHangingIndent(),
+];
+```
+
+<Note>
+
+Using `margin-left` (not `padding-left`) for the hanging indent is deliberate. CodeMirror's theme sets `padding-left` on `.cm-line` for horizontal padding. Using `margin-left` avoids overriding that padding and allows both to coexist.
+
+</Note>

@@ -106,7 +106,11 @@ controller.unnamedRegister = clipboardRegister;
 
 上記のアプローチの制限として、エディターの外部でコピーされたテキスト（例: 別のアプリケーション）は `p` で自動的に利用できません。内部レジスタはエディター内でヤンクされたテキストしか把握していないためです。
 
-外部クリップボードの内容を処理するには、エディターがフォーカスを得たときに `navigator.clipboard` から読み取ります。
+外部クリップボードの内容を処理するには、エディターまたはウィンドウがフォーカスを得たときに `navigator.clipboard` から読み取ります。
+
+### 標準ブラウザでのアプローチ
+
+標準的なウェブページでは、エディターの `focus` イベントをリッスンします。
 
 ```ts
 view.dom.addEventListener("focus", async () => {
@@ -123,15 +127,55 @@ view.dom.addEventListener("focus", async () => {
 });
 ```
 
+### Tauri / WKWebView: `window.focus` を使用する
+
 <Warning>
 
-`navigator.clipboard.readText()` にはクリップボード読み取り権限が必要です。一部のブラウザでは、ドキュメントがフォーカスされると自動的に権限が付与されます。その他のブラウザでは、ユーザーに権限プロンプトが表示される場合があります。権限が拒否された場合、catch ブロックがエラーを暗黙的に処理します。
+Tauri アプリケーション（macOS WKWebView を使用）では、エディター要素の `focusin` イベントハンドラー内で `navigator.clipboard.readText()` を呼び出すと、ネイティブの macOS「ペースト」編集メニューがトリガーされます。これはテキストカーソル付近にフローティングメニューとして表示されるクリップボード許可プロンプトです。ユーザーがエディターにクリックするたびに表示されるため、ユーザー体験が悪化します。
+
+**`view.dom.addEventListener("focusin", ...)` ではなく `window.addEventListener("focus", ...)` を使用してください。**
 
 </Warning>
 
+`window.focus` イベントは、アプリケーションウィンドウが別のアプリケーションからフォーカスを取り戻した（例: ユーザーが Cmd+Tab で戻った）ときに発火します。これはシステムクリップボードに外部ソースからの新しいコンテンツが含まれている可能性が最も高い瞬間です。
+
+```ts
+const syncHandler = async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && clipboardRegister.keyBuffer.join("\n") !== text) {
+      clipboardRegister.keyBuffer = [text];
+      clipboardRegister.linewise = text.endsWith("\n");
+      clipboardRegister.blockwise = false;
+    }
+  } catch {
+    // クリップボード権限が拒否 -- 無視
+  }
+};
+
+window.addEventListener("focus", syncHandler);
+
+// エディター破棄時のクリーンアップ
+function teardown() {
+  window.removeEventListener("focus", syncHandler);
+}
+```
+
+標準アプローチとの主な違い:
+
+- **`window` イベント、エディター DOM イベントではない** -- macOS WKWebView のクリップボード許可プロンプトのトリガーを回避
+- **重複チェック** -- クリップボードの内容が既に保存されているものと異なる場合のみレジスタを更新（`keyBuffer.join("\n") !== text`）
+- **行単位の検出** -- クリップボードテキストが改行で終わる場合 `linewise: true` を設定。これにより `p` が現在の行の下にペーストされ、vim の行単位ペースト動作に一致
+
+<Note>
+
+`navigator.clipboard.readText()` にはクリップボード読み取り権限が必要です。一部のブラウザでは、ドキュメントがフォーカスされると自動的に権限が付与されます。その他のブラウザでは、ユーザーに権限プロンプトが表示される場合があります。権限が拒否された場合、catch ブロックがエラーを暗黙的に処理します。
+
+</Note>
+
 ## 完全な実装
 
-すべてをまとめた実装です。
+すべてをまとめた実装です。このバージョンはクリップボード同期に `window.focus` を使用し、標準ブラウザと Tauri/WKWebView 環境の両方と互換性があります。
 
 ```ts
 import { Vim } from "@replit/codemirror-vim";
@@ -180,33 +224,45 @@ function createClipboardRegister() {
   return register;
 }
 
-function setupClipboardIntegration(view: EditorView) {
+function setupClipboardIntegration(editorElement: HTMLElement) {
   const controller = Vim.getRegisterController();
   const registers = controller.registers;
   const clipboardRegister = createClipboardRegister();
 
-  // Replace system clipboard registers
+  // システムクリップボードレジスタを置き換え
   registers["*"] = clipboardRegister;
   registers["+"] = clipboardRegister;
 
-  // Make unnamed register use clipboard (clipboard=unnamedplus)
+  // 無名レジスタをクリップボードに設定 (clipboard=unnamedplus)
   registers['"'] = clipboardRegister;
   controller.unnamedRegister = clipboardRegister;
 
-  // Sync external clipboard on focus
-  view.dom.addEventListener("focus", async () => {
+  // window.focus で外部クリップボードを同期（エディターの focusin ではない）
+  // focusin を使用すると macOS WKWebView の「ペースト」許可メニューがトリガーされる
+  let cancelled = false;
+  const syncHandler = async () => {
+    if (cancelled) return;
     try {
       const text = await navigator.clipboard.readText();
-      if (text) {
+      if (cancelled) return;
+      if (text && clipboardRegister.keyBuffer.join("\n") !== text) {
         clipboardRegister.keyBuffer = [text];
-        clipboardRegister.linewise = false;
+        clipboardRegister.linewise = text.endsWith("\n");
         clipboardRegister.blockwise = false;
       }
     } catch {
       // clipboard-read permission denied
     }
-  });
+  };
+
+  window.addEventListener("focus", syncHandler);
+
+  // クリーンアップ関数を返す
+  return () => {
+    cancelled = true;
+    window.removeEventListener("focus", syncHandler);
+  };
 }
 ```
 
-EditorView の作成後に `setupClipboardIntegration(view)` を呼び出してください。
+EditorView の作成後に `setupClipboardIntegration(view.dom)` を呼び出してください。返されたクリーンアップ関数を保存し、エディター破棄時に呼び出してください。

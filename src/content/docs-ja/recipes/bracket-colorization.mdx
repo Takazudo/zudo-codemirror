@@ -1,0 +1,210 @@
+---
+title: ブラケットの色分け
+description: ViewPlugin とスタックベースのペアリング、テーマ対応の CSS カスタムプロパティを使い、ネストの深さに応じてマッチする括弧を色分けする方法。
+sidebar_position: 7
+---
+
+# ブラケットの色分け
+
+このレシピでは、ネストの深さに基づいてマッチする括弧のペアを色分けする CodeMirror Extension を構築します。各深さレベルに固定パレットから異なる色が割り当てられ、パレットはサイクルします。正しくペアになった括弧のみが色付けされ、マッチしない括弧はスタイルなしのままです。
+
+## 概要
+
+この Extension は3つの部分で構成されます。
+
+1. **純粋なスキャナー関数** -- マッチした括弧ペアとそのネスト深さを検出
+2. **ViewPlugin** -- スキャン結果をキャッシュし、表示範囲のデコレーションを構築
+3. **ベーステーマ** -- CSS クラスをカスタムプロパティ経由で色にマッピング
+
+## 括弧ペアのスキャン
+
+スキャナーはスタックベースのアプローチでドキュメントテキストを走査します。開き括弧はスタックにプッシュされ、閉じ括弧は対応するオープナーをポップします。マッチしたペアのみがマークを生成します。
+
+```ts
+const OPEN_BRACKETS = new Set(["(", "[", "{"]);
+const CLOSE_BRACKETS: Record<string, string> = {
+  ")": "(",
+  "]": "[",
+  "}": "{",
+};
+
+interface BracketMark {
+  pos: number;
+  depth: number;
+}
+
+function findBracketPairs(text: string): BracketMark[] {
+  const stack: Array<{ char: string; pos: number; depth: number }> = [];
+  const pairs: Array<[number, number, number]> = [];
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (OPEN_BRACKETS.has(ch)) {
+      stack.push({ char: ch, pos: i, depth: stack.length });
+    } else if (ch in CLOSE_BRACKETS) {
+      const expected = CLOSE_BRACKETS[ch];
+      if (stack.length > 0 && stack[stack.length - 1].char === expected) {
+        const opener = stack.pop()!;
+        pairs.push([opener.pos, i, opener.depth]);
+      }
+    }
+  }
+
+  const marks: BracketMark[] = [];
+  for (const [openPos, closePos, depth] of pairs) {
+    marks.push({ pos: openPos, depth });
+    marks.push({ pos: closePos, depth });
+  }
+  marks.sort((a, b) => a.pos - b.pos);
+  return marks;
+}
+```
+
+設計上の重要なポイント:
+
+- **純粋関数** -- `findBracketPairs` はプレーンな文字列を受け取りデータを返します。CodeMirror に依存せず、ユニットテストが容易です。
+- **マッチしない括弧は静かに無視** -- `)` がスタックのトップとマッチしない場合はスキップされます。スキャン後にスタックに残った未マッチのオープナーも無視されます。
+- **マークは位置順にソート** -- `RangeSetBuilder` がドキュメント順のデコレーションを要求するため、ソートが必要です。
+
+## デコレーションの構築
+
+デコレーションビルダーは、キャッシュされたマークを表示範囲のみにフィルタリングし、画面外コンテンツの不要な DOM 操作を回避します。
+
+```ts
+import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
+
+const COLOR_COUNT = 6;
+
+function buildDecorationsFromMarks(
+  marks: BracketMark[],
+  view: EditorView,
+): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const visibleRanges = view.visibleRanges;
+  let rangeIdx = 0;
+
+  for (const mark of marks) {
+    while (
+      rangeIdx < visibleRanges.length &&
+      visibleRanges[rangeIdx].to <= mark.pos
+    ) {
+      rangeIdx++;
+    }
+
+    if (
+      rangeIdx < visibleRanges.length &&
+      mark.pos >= visibleRanges[rangeIdx].from &&
+      mark.pos < visibleRanges[rangeIdx].to
+    ) {
+      const colorIndex = mark.depth % COLOR_COUNT;
+      builder.add(
+        mark.pos,
+        mark.pos + 1,
+        Decoration.mark({ class: `cm-bracket-${colorIndex}` }),
+      );
+    }
+  }
+
+  return builder.finish();
+}
+```
+
+深さから色へのマッピングは剰余算術 (`depth % COLOR_COUNT`) を使用し、ネストがパレットサイズを超えると色がサイクルします。
+
+## ViewPlugin
+
+プラグインはコンテンツが変更されたときのみドキュメント全体を再スキャンします。ビューポートのみの変更（スクロール）時には、キャッシュされたマークを再利用し、新しい表示範囲にフィルタリングするだけです。
+
+```ts
+import { ViewPlugin, ViewUpdate } from "@codemirror/view";
+
+const bracketColorizePlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    marks: BracketMark[];
+
+    constructor(view: EditorView) {
+      this.marks = findBracketPairs(view.state.doc.toString());
+      this.decorations = buildDecorationsFromMarks(this.marks, view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged) {
+        this.marks = findBracketPairs(update.view.state.doc.toString());
+        this.decorations = buildDecorationsFromMarks(this.marks, update.view);
+      } else if (update.viewportChanged) {
+        this.decorations = buildDecorationsFromMarks(this.marks, update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
+```
+
+<Tip>
+
+2段階の更新戦略（`docChanged` vs `viewportChanged`）はパフォーマンスにとって重要です。ドキュメント全体のスキャンは O(n) ですが、キャッシュされたマークを表示範囲にフィルタリングするのはずっと安価で、スクロール中に頻繁に発生します。
+
+</Tip>
+
+## CSS カスタムプロパティによるテーマ対応の色
+
+ベーステーマは合理的なデフォルト値を持つ CSS カスタムプロパティ経由で色を割り当てます。ホストアプリケーションはこれらのプロパティをオーバーライドしてカラースキームに合わせることができます。
+
+```ts
+const bracketColorizeTheme = EditorView.baseTheme({
+  ".cm-bracket-0": { color: "var(--bracket-color-0, #ffd700)" },
+  ".cm-bracket-1": { color: "var(--bracket-color-1, #da70d6)" },
+  ".cm-bracket-2": { color: "var(--bracket-color-2, #179fff)" },
+  ".cm-bracket-3": { color: "var(--bracket-color-3, #ffd700)" },
+  ".cm-bracket-4": { color: "var(--bracket-color-4, #da70d6)" },
+  ".cm-bracket-5": { color: "var(--bracket-color-5, #179fff)" },
+});
+```
+
+`EditorView.baseTheme()` を使用（`EditorView.theme()` ではなく）することで、これらのスタイルは低い優先度となり、アプリケーションのテーマでオーバーライドできます。
+
+デフォルトはゴールド、オーキッド、ブルーの3色でサイクルします。ライトとダークの両方の背景で視覚的に区別しやすい色です。
+
+## Extension のエクスポート
+
+プラグインとテーマを単一の Extension としてバンドルします。
+
+```ts
+import type { Extension } from "@codemirror/state";
+
+function bracketColorize(): Extension {
+  return [bracketColorizePlugin, bracketColorizeTheme];
+}
+```
+
+## 使い方
+
+```ts
+const extensions = [
+  // ... other extensions
+  bracketColorize(),
+];
+```
+
+色をカスタマイズするには、親要素に CSS カスタムプロパティを設定します。
+
+```css
+.my-editor {
+  --bracket-color-0: #e6b422;
+  --bracket-color-1: #c678dd;
+  --bracket-color-2: #61afef;
+  --bracket-color-3: #e6b422;
+  --bracket-color-4: #c678dd;
+  --bracket-color-5: #61afef;
+}
+```
+
+<Note>
+
+このアプローチは構文木ではなく生のドキュメントテキストをスキャンします。Markdown やプレーンテキストでは問題なく動作しますが、文字列リテラルやコメント内の括弧も対象になります。言語を考慮したブラケットカラーライザーを作る場合は、`syntaxTree(state)` を使ってパーサーが識別した括弧トークンのみを走査します。
+
+</Note>

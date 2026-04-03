@@ -106,7 +106,11 @@ With this in place, plain `yy` copies to the system clipboard and `p` pastes wha
 
 One limitation of the approach above is that text copied outside the editor (e.g., from another application) is not automatically available for `p`. The internal register only knows about text that was yanked inside the editor.
 
-To handle external clipboard content, read from `navigator.clipboard` when the editor gains focus.
+To handle external clipboard content, read from `navigator.clipboard` when the editor or window gains focus.
+
+### Standard Browser Approach
+
+In a standard web page, listening on the editor's `focus` event works:
 
 ```ts
 view.dom.addEventListener("focus", async () => {
@@ -123,15 +127,55 @@ view.dom.addEventListener("focus", async () => {
 });
 ```
 
+### Tauri / WKWebView: Use `window.focus` Instead
+
 <Warning>
 
-`navigator.clipboard.readText()` requires the page to have clipboard-read permission. In some browsers, this is granted automatically when the document is focused. In others, the user may see a permission prompt. If permission is denied, the catch block silently handles the error.
+In Tauri applications (which use macOS WKWebView), calling `navigator.clipboard.readText()` inside a `focusin` event handler on the editor element triggers the native macOS "Paste" editing menu -- a clipboard permission prompt that appears as a floating menu near the text cursor. This creates a poor user experience because it appears every time the user clicks into the editor.
+
+**Use `window.addEventListener("focus", ...)` instead of `view.dom.addEventListener("focusin", ...)`.**
 
 </Warning>
 
+The `window.focus` event fires when the application window regains focus from another application (e.g., the user Cmd-Tabs back). This is the moment when the system clipboard is most likely to contain new content from an external source.
+
+```ts
+const syncHandler = async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && clipboardRegister.keyBuffer.join("\n") !== text) {
+      clipboardRegister.keyBuffer = [text];
+      clipboardRegister.linewise = text.endsWith("\n");
+      clipboardRegister.blockwise = false;
+    }
+  } catch {
+    // clipboard permission denied -- ignore
+  }
+};
+
+window.addEventListener("focus", syncHandler);
+
+// Cleanup when the editor is destroyed
+function teardown() {
+  window.removeEventListener("focus", syncHandler);
+}
+```
+
+Key differences from the standard approach:
+
+- **`window` event, not editor DOM event** -- Avoids triggering the macOS WKWebView clipboard permission prompt
+- **Deduplication check** -- Only updates the register if the clipboard content differs from what is already stored (`keyBuffer.join("\n") !== text`)
+- **Linewise detection** -- Sets `linewise: true` when the clipboard text ends with a newline, which makes `p` paste below the current line (matching vim's linewise paste behavior)
+
+<Note>
+
+`navigator.clipboard.readText()` requires the page to have clipboard-read permission. In some browsers, this is granted automatically when the document is focused. In others, the user may see a permission prompt. If permission is denied, the catch block silently handles the error.
+
+</Note>
+
 ## Complete Implementation
 
-Putting it all together.
+Putting it all together. This version uses `window.focus` for clipboard sync, which is compatible with both standard browsers and Tauri/WKWebView environments.
 
 ```ts
 import { Vim } from "@replit/codemirror-vim";
@@ -180,7 +224,7 @@ function createClipboardRegister() {
   return register;
 }
 
-function setupClipboardIntegration(view: EditorView) {
+function setupClipboardIntegration(editorElement: HTMLElement) {
   const controller = Vim.getRegisterController();
   const registers = controller.registers;
   const clipboardRegister = createClipboardRegister();
@@ -193,20 +237,32 @@ function setupClipboardIntegration(view: EditorView) {
   registers['"'] = clipboardRegister;
   controller.unnamedRegister = clipboardRegister;
 
-  // Sync external clipboard on focus
-  view.dom.addEventListener("focus", async () => {
+  // Sync external clipboard on window focus (NOT editor focusin).
+  // Using focusin triggers the macOS WKWebView "Paste" permission menu.
+  let cancelled = false;
+  const syncHandler = async () => {
+    if (cancelled) return;
     try {
       const text = await navigator.clipboard.readText();
-      if (text) {
+      if (cancelled) return;
+      if (text && clipboardRegister.keyBuffer.join("\n") !== text) {
         clipboardRegister.keyBuffer = [text];
-        clipboardRegister.linewise = false;
+        clipboardRegister.linewise = text.endsWith("\n");
         clipboardRegister.blockwise = false;
       }
     } catch {
       // clipboard-read permission denied
     }
-  });
+  };
+
+  window.addEventListener("focus", syncHandler);
+
+  // Return cleanup function
+  return () => {
+    cancelled = true;
+    window.removeEventListener("focus", syncHandler);
+  };
 }
 ```
 
-Call `setupClipboardIntegration(view)` after creating the EditorView.
+Call `setupClipboardIntegration(view.dom)` after creating the EditorView. Store the returned cleanup function and call it when the editor is destroyed.
