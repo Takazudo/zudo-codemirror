@@ -121,13 +121,13 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           if [ "$DEPLOY_RESULT" = "success" ]; then
-            STATUS="zudo-codemirror deploy succeeded!"
+            STATUS="zudo-codemirror-wisdom deploy succeeded!"
           elif [ "$BUILD_SITE_RESULT" = "failure" ]; then
-            STATUS="zudo-codemirror deploy failed (site build)"
+            STATUS="zudo-codemirror-wisdom deploy failed (site build)"
           elif [ "$DEPLOY_RESULT" = "failure" ]; then
-            STATUS="zudo-codemirror deploy failed (deploy)"
+            STATUS="zudo-codemirror-wisdom deploy failed (deploy)"
           else
-            STATUS="zudo-codemirror deploy cancelled"
+            STATUS="zudo-codemirror-wisdom deploy cancelled"
           fi
 
           SHORT_SHA=$(echo "$GITHUB_SHA_VAL" | cut -c1-7)

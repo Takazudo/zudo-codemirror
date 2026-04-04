@@ -1,4 +1,4 @@
-# zudo-codemirror
+# zudo-codemirror-wisdom
 
 Takazudo's personal CodeMirror 6 dev notes. Astro 6 + MDX + Tailwind CSS v4 + React islands. Base path: `/pj/zudo-codemirror/`.
 
@@ -208,4 +208,4 @@ Available globally in MDX without imports:
 - PR checks: typecheck + build + Cloudflare Pages preview
 - Main deploy: build + Cloudflare Pages production + IFTTT notification
 - Secrets: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, IFTTT_PROD_NOTIFY
-- Cloudflare Pages project: `zudo-codemirror`
+- Cloudflare Pages project: `zudo-codemirror-wisdom`

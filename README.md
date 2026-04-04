@@ -1,4 +1,4 @@
-# zudo-codemirror
+# zudo-codemirror-wisdom
 
 Takazudo's personal CodeMirror 6 development notes. Not official CodeMirror documentation.
 
