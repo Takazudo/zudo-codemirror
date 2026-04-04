@@ -23,7 +23,7 @@ export const settings = {
     darkScheme: "Default Dark",
     respectPrefersColorScheme: true,
   } satisfies ColorModeConfig,
-  siteName: "zudo-codemirror",
+  siteName: "zudo-codemirror-wisdom",
   siteDescription: "Takazudo's personal CodeMirror 6 dev notes — not official documentation" as string,
   base: "/pj/zudo-codemirror/",
   trailingSlash: false as boolean,
